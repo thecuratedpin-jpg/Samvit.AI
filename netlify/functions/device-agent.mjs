@@ -84,7 +84,9 @@ export default async (req, context) => {
     if (body.action === 'poll') {
       // While a stop is engaged the agent is told to stop taking new work,
       // but can still report on anything already in flight.
-      if (global.halted) return json({actions: [], halted: true, reason: global.reason || 'Emergency stop is engaged'});
+      const {monitorsForDevice} = await import('../lib/devices/proactive.js');
+      const monitors = await monitorsForDevice(identity.accountId, identity.deviceId).catch(() => []);
+      if (global.halted) return json({actions: [], monitors, halted: true, reason: global.reason || 'Emergency stop is engaged'});
       const actions = await claimActions(identity.accountId, identity.deviceId, {
         limit: 5,
         leaseMs: DEFAULT_LEASE_MS
@@ -96,9 +98,19 @@ export default async (req, context) => {
           args: action.args,
           expected: action.expected
         })),
+        monitors: monitors.map(m => ({id: m.id, kind: m.kind, path: m.path})),
         leaseMs: DEFAULT_LEASE_MS,
         halted: false
       });
+    }
+
+    if (body.action === 'event') {
+      // Proactive signal from a running watch (P14). Validated against the
+      // device's ACTIVE monitors and rate-limited; never accepted blind.
+      const {recordSignal} = await import('../lib/devices/proactive.js');
+      const result = await recordSignal(identity.accountId, identity.deviceId, body.signal || {});
+      if (!result.recorded) return json({recorded: false, reason: result.reason}, 429);
+      return json({recorded: true});
     }
 
     if (body.action === 'complete') {

@@ -23,12 +23,14 @@ export default async (req, context) => {
 
   try {
     if (req.method === 'GET') {
-      const [devices, actions, global] = await Promise.all([
+      const {readSignals} = await import('../lib/devices/proactive.js');
+      const [devices, actions, global, signals] = await Promise.all([
         listDevices(auth.accountId),
         listActions(auth.accountId, {limit: 20}),
-        readGlobalStop()
+        readGlobalStop(),
+        readSignals(auth.accountId).catch(() => [])
       ]);
-      return json({devices, actions, globalStop: {halted: global.halted === true, reason: global.reason || null}});
+      return json({devices, actions, signals, globalStop: {halted: global.halted === true, reason: global.reason || null}});
     }
 
     const body = await readBody(req, 32000);
@@ -51,6 +53,18 @@ export default async (req, context) => {
       case 'revoke': {
         if (!body.deviceId) return json({error: '`deviceId` is required.'}, 400);
         return json({device: await revokeDevice(auth.accountId, body.deviceId, {env})});
+      }
+      case 'monitor-enable': {
+        // P14: opt-in ONLY. A watch covers one authorised folder; it expires
+        // in 30 days and reports folder-change signals, nothing more.
+        if (!body.deviceId || typeof body.path !== 'string') return json({error: '`deviceId` and `path` are required.'}, 400);
+        const {enableMonitor} = await import('../lib/devices/proactive.js');
+        return json({monitor: await enableMonitor(auth.accountId, body.deviceId, {kind: 'watch.folder', path: body.path})}, 201);
+      }
+      case 'monitor-disable': {
+        if (!body.deviceId || typeof body.monitorId !== 'string') return json({error: '`deviceId` and `monitorId` are required.'}, 400);
+        const {disableMonitor} = await import('../lib/devices/proactive.js');
+        return json({monitor: await disableMonitor(auth.accountId, body.deviceId, body.monitorId)});
       }
       case 'approve': {
         if (!body.actionId) return json({error: '`actionId` is required.'}, 400);

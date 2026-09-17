@@ -28,6 +28,9 @@ export async function renderComputers({main, api, esc, notify}) {
    <div class="panel spaced"><h3>Waiting for your decision</h3>
    <p class="intro">These actions were refused automatically because they need your approval. Nothing has happened on your computer yet.</p>
    <div id="action-list">Loading…</div></div>
+   <div class="panel spaced"><h3>Folder signals</h3>
+   <p class="intro">Advisory notices from folders you chose to watch. Opening them or acting on them is always your call — a signal never runs anything by itself.</p>
+   <div id="signal-list">Loading…</div></div>
    <div class="panel spaced"><h3>Recent actions</h3>
    <p class="intro">The latest work Samvit asked a computer to do, and what the computer actually observed.</p>
    <div id="recent-actions">Loading…</div></div>
@@ -65,6 +68,16 @@ export async function renderComputers({main, api, esc, notify}) {
     <p class="intro">Samvit treats every page as untrusted data. A site permission lets its agent <em>reach</em> the site — it never grants permission to act <em>on</em> your computer based on what a page says.</p></details>`;
   };
 
+  const monitorEditor = (device) => {
+    const monitors = (device.monitors || []).filter(m => m.enabled !== false && (m.expiresAt || 0) > Date.now());
+    const rows = monitors.map(m => `<p><code>${esc(m.path)}</code> · signals until ${esc(new Date(m.expiresAt).toLocaleDateString())} <button class="secondary" data-disable-monitor="${esc(m.id)}" data-device="${esc(device.id)}">Stop watching</button></p>`).join('');
+    const folders = (device.scopes || []).map(s => `<option value="${esc(s.path)}">${esc(s.path)}</option>`).join('');
+    return `<details><summary>Folder change signals (${monitors.length}/3)</summary>
+    ${rows || '<p>No folders watched. This is opt-in: enable it per authorised folder and Samvit signals you when files change there. Signals never act on your computer by themselves.</p>'}
+    ${folders ? `<div class="form-row"><select data-watch-folder="${esc(device.id)}" aria-label="Folder to watch">${folders}</select><button class="secondary" data-enable-monitor="${esc(device.id)}">Watch this folder</button></div>` : '<p class="intro">Authorise a folder above first.</p>'}
+    <p class="intro">Watches expire after 30 days, stop at 20 signals a day, and can be cancelled any time. They only report that files changed — nothing more.</p></details>`;
+  };
+
   async function refresh() {
     try {
       const data = await api('/api/devices');
@@ -82,10 +95,13 @@ export async function renderComputers({main, api, esc, notify}) {
       $('#device-list').innerHTML = devices.length ? devices.map(device => `<article class="record">
         <h3>${esc(device.name)} ${presence(device)}</h3>
         <p>${esc(device.platform)} · ${esc(device.arch)} · ${device.lastSeenAt ? `last seen ${esc(new Date(device.lastSeenAt).toLocaleString())}` : 'never connected'}</p>
-        ${folderEditor(device)}${commandEditor(device)}${originEditor(device)}
+        ${folderEditor(device)}${commandEditor(device)}${originEditor(device)}${monitorEditor(device)}
         <div class="record-actions"><button class="secondary" data-revoke="${esc(device.id)}">${device.revoked ? 'Already disconnected' : 'Disconnect this computer'}</button></div>
       </article>`).join('') : '<p>No computers paired yet.</p>';
 
+      const signals = data.signals || [];
+      const signalBox = document.getElementById('signal-list');
+      if (signalBox) signalBox.innerHTML = signals.length ? [...signals].reverse().map(s => `<article class="record"><h3>${esc(s.summary || 'Folder signal')}</h3><p>${esc(s.deviceName || 'a computer')} · ${esc(s.event)} · ${esc(new Date(s.at).toLocaleString())}</p><p class="intro">${esc(s.path)}</p></article>`).join('') : '<p>No signals yet. Enable a folder watch above and Samvit will tell you when it changes.</p>';
       const waiting = (data.actions || []).filter(action => action.status === 'pending' && action.decision?.outcome === 'ASK_USER');
       $('#action-list').innerHTML = waiting.length ? waiting.map(action => `<article class="record">
         <h3>${esc(action.capability)} on ${esc(nameOf(action.deviceId))}${action.missionId ? ` · mission ${esc(String(action.missionId).slice(0, 8))}…` : ''}</h3>
@@ -184,6 +200,23 @@ export async function renderComputers({main, api, esc, notify}) {
         }
         return {...state, browserOrigins: next};
       }, 'Site permission updated.');
+    });
+    main.querySelectorAll('[data-enable-monitor]').forEach(button => button.onclick = async () => {
+      const id = button.dataset.enableMonitor;
+      const path = main.querySelector(`[data-watch-folder="${id}"]`)?.value;
+      if (!path) { notify('Choose a folder to watch first.'); return; }
+      try {
+        await api('/api/devices', {action: 'monitor-enable', deviceId: id, path});
+        notify('Watching. You will get a signal when files change there.');
+        await refresh();
+      } catch (error) { notify(error.message); }
+    });
+    main.querySelectorAll('[data-disable-monitor]').forEach(button => button.onclick = async () => {
+      try {
+        await api('/api/devices', {action: 'monitor-disable', deviceId: button.dataset.device, monitorId: button.dataset.disableMonitor});
+        notify('Watch stopped.');
+        await refresh();
+      } catch (error) { notify(error.message); }
     });
     main.querySelectorAll('[data-revoke]').forEach(button => button.onclick = async () => {
       if (!confirm('Disconnect this computer? It will stop being able to act until you pair it again.')) return;

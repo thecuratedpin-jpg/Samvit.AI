@@ -31,8 +31,10 @@ import {createReceiptStore, shouldRecord} from './receipts.js';
  * `host` is the executor's path bridge (see executor.js). Production leaves
  * it undefined — the native bridge — so behaviour on a real PC is unchanged.
  */
-export async function runOnce(transport, {log = () => {}, execute = executeAction, receipts = null, host = undefined} = {}) {
-  const {actions = [], halted} = await transport.poll();
+export async function runOnce(transport, {log = () => {}, execute = executeAction, receipts = null, host = undefined, onPoll = null} = {}) {
+  const pollBody = await transport.poll();
+  if (onPoll) onPoll(pollBody);
+  const {actions = [], halted} = pollBody;
   if (halted) {
     log('Samvit has engaged the emergency stop; not taking new work.');
     return {executed: 0, refused: 0, replayed: 0, halted: true};
@@ -96,14 +98,26 @@ export async function main({log = message => console.log(message)} = {}) {
   const adapters = adapterRegistry().list().filter(adapter => !adapter.available).map(adapter => adapter.name);
   log(`Not implemented in this release: ${adapters.join(', ')}`);
 
+  // P14: proactive watch state lives here; the cloud decides WHICH folders,
+  // the agent enforces containment locally before any watcher exists.
+  const {reconcileWatchers, closeWatchers} = await import('./proactive.js');
+  const {nativeHost} = await import('./executor.js');
+  let watchers = new Map();
+
   let stopped = false;
-  const stop = () => { stopped = true; log('Stopping.'); process.exit(0); };
+  const stop = () => { stopped = true; closeWatchers(watchers); log('Stopping.'); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 
+  let lastMonitors = [];
   while (!stopped) {
     try {
-      await runOnce(transport, {log, receipts});
+      await runOnce(transport, {log, receipts, onPoll: body => { lastMonitors = body.monitors || lastMonitors; }});
+      watchers = reconcileWatchers(watchers, lastMonitors, transport.policy?.scopes || [], {
+        host: nativeHost,
+        log,
+        onEvent: async signal => { await transport.sendSignal(signal); }
+      });
     } catch (error) {
       // Network blips are normal; keep polling rather than exiting.
       log(`poll failed: ${error.message}`);

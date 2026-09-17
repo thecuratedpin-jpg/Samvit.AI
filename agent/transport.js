@@ -54,10 +54,16 @@ export function createTransport({cloudUrl, deviceId, deviceToken, pollMs = 3000,
       return session;
     },
 
-    /** Claim queued work. Returns {actions, halted}. */
+    /** Claim queued work. Returns {actions, monitors, halted}. */
     async poll() {
       await api.ensureSession();
       return post({action: 'poll'}, {auth: 'session'});
+    },
+
+    /** Post one proactive watch signal (P14). Validated + rate-limited server-side. */
+    async sendSignal(signal) {
+      await api.ensureSession();
+      return post({action: 'event', signal}, {auth: 'session'});
     },
 
     /** Report the real observation AND the result the model needs. */
