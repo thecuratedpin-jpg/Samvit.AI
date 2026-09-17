@@ -1,6 +1,6 @@
 {
   "name": "samvit-os",
-  "version": "12.1.0",
+  "version": "14.0.0",
   "private": true,
   "type": "module",
   "description": "Samvit — a multi-model AI workspace evolving into an autonomous intelligence OS, with a permissioned bridge to a user's own paired computer.",

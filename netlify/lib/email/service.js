@@ -36,7 +36,10 @@ export function emailProvider(env) {
   const from = env.get('SAMVIT_EMAIL_FROM');
   const origin = publicOrigin(env);
 
-  if (wanted === 'dev' || (!resendKey && isDevelopmentMode(env))) {
+  // A configured production provider ALWAYS wins. An explicit dev request can
+  // only capture mail when no real provider is configured — a production
+  // deployment can never be accidentally muted into pretend-send mode.
+  if (!resendKey && (wanted === 'dev' || isDevelopmentMode(env))) {
     return {name: 'dev-capture', from: from || 'samvit@localhost', origin};
   }
   if (!resendKey) {

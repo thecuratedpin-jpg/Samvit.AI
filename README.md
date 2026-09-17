@@ -1,8 +1,10 @@
-# Samvit 9 — automatic task orchestration
+# Samvit 14 — production identity & permissioned autonomy
 
-**Ask Samvit is now the starting page.** Describe a goal; Samvit classifies it, plans a bounded task graph, chooses connected models, executes authorized tools, reviews claims and saves the result. Exact arithmetic needs no model. Missions support pause, resume and cancellation, with progress stored on the server. The existing Agent Studio, chat, billing, connections and appearance remain available.
+**Accounts are open and real.** Anyone can sign up with an email and password; the account activates by verifying its inbox. There is no invitation code, no owner-claim page, no "first user" rule — the authenticated account is the identity boundary. Email delivery is a server-side provider abstraction (Resend in production, bounded dev-capture locally); verification links are single-use, hashed-at-rest, expiring, replay-resistant. Sign-in carries per-account brute-force lockout on top of IP limits, generic errors, and session rotation on every security-relevant change.
 
-Read [the V9 engineering report](docs/V9-ENGINEERING-REPORT.md) for capabilities, checks and limitations. Configure the new settings in `.env.example`; deployed missions require Netlify background/scheduled functions and `SAMVIT_PUBLIC_ORIGIN`. Research and semantic retrieval need their respective keys and positive cost estimates. No real providers, payments or deployed workers were exercised during local validation. Billing remains test mode only.
+**Autonomy stays permissioned.** Background missions plan, execute, observe and verify against real state; paired computers act only through queue + policy + approval rails; the V14 browser foundation adds exactly two honest capabilities (open a page in the user's browser; fetch a page as untrusted text) with per-origin permissions; proactive folder-change signals are opt-in, contained, capped and cancellable — and advisory only.
+
+Read [the V14 identity & autonomy record](docs/V14-IDENTITY-AND-AUTONOMY.md) and the [dedicated security review](docs/V14-SECURITY-REVIEW.md). Earlier records: [V13 execution layer](docs/V13-EXECUTION-LAYER.md), [V9 engineering report](docs/V9-ENGINEERING-REPORT.md). Billing remains Stripe test mode only.
 
 ## Preserved V8 features
 
@@ -24,9 +26,9 @@ Run `npm ci`, `npm run build`, then `npm run preview`. The interface is a real o
 
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/thecuratedpin-jpg/Samvit-)
 
-Upload this version to that public repository **before using the button**; the ZIP alone does not update GitHub. The template asks for a private registration invitation code and `SAMVIT_AUTO_SECRETS=true`. Samvit generates two independent random secrets and stores them once in private Netlify Blobs using conditional writes. Environment values override generated values. Keep and back up existing secrets when upgrading; replacing the encryption secret prevents reading previously saved keys. Do not delete the runtime-secrets store.
+Upload this version to that public repository **before using the button**; the ZIP alone does not update GitHub. Samvit generates two independent random secrets (`SAMVIT_AUTO_SECRETS=true`) and stores them once in private Netlify Blobs using conditional writes. Environment values override generated values. Keep and back up existing secrets when upgrading; replacing the encryption secret prevents reading previously saved keys. Do not delete the runtime-secrets store.
 
-Open **Setup check** before signing in. Configure Resend delivery (RESEND_API_KEY, verified SAMVIT_EMAIL_FROM, HTTPS SAMVIT_PUBLIC_ORIGIN) and confirm scheduled jobs run. Registration returns a queued-email acknowledgement. Verify the mailbox and set a password from the email link before AI or billing can run. On an ungated instance, the first owner needs SAMVIT_OWNER_CLAIM_SECRET (16+ characters). Readiness stays false until ownership is claimed. The topbar Sign in button works even if status/setup checks fail.
+Open **Setup check** before signing in. Configure Resend delivery (RESEND_API_KEY, verified SAMVIT_EMAIL_FROM, HTTPS SAMVIT_PUBLIC_ORIGIN) and confirm scheduled jobs run. Registration is open: a new user receives a verification email and activates from the link — no invitation or owner claim exists anywhere in V14. The topbar Sign in button works even if status/setup checks fail.
 
 The [official Netlify template documentation](https://docs.netlify.com/deploy/create-deploys/#file-based-template-configuration) defines environment prompts; secret generation is implemented by Samvit at runtime, not by a fictional TOML generator setting.
 
@@ -40,13 +42,11 @@ npm run build
 npm run dev
 ```
 
-Copy `.env.example` to `.env` first (`Copy-Item .env.example .env` in PowerShell). Netlify dev supplies the function and Blobs environment. Use the URL it prints. Automatic secrets require working Blobs; the public setup check explains missing configuration. An optional `ACCESS_CODE` is a registration invitation, not a shared login. `DEV_MODE=true` only opens explicit local development with no invitation code; production keeps authentication closed.
+Copy `.env.example` to `.env` first (`Copy-Item .env.example .env` in PowerShell). Netlify dev supplies the function and Blobs environment. Use the URL it prints. Automatic secrets require working Blobs; the public setup check explains missing configuration. `ACCESS_CODE` is only the explicit local-development toggle (with `DEV_MODE=true` it opens localhost without sign-in); it never gates registration. Production keeps authentication closed.
 
-## Upgrade from v6
+## Upgrade from v6–v13
 
-Back up the old site data and preserve its encryption secret. Deploy this version to the same Netlify site/store. The first claim-authorized, email-verified account becomes the deployment owner and receives a **copy** of legacy conversations, memories, projects, missions, usage, encrypted connections, combos, subscription, budget reservations and Stripe customer mapping. Originals are retained. Sign in again to resume if migration is interrupted.
-
-If the old deployment had no ACCESS_CODE, set `SAMVIT_OWNER_CLAIM_SECRET` to a private code of 16+ characters and enter it in the registration form. This prevents a visitor from claiming old data. Shared v6 session tokens no longer work. New accounts start Free. Only the first owner inherits the old deployment plan. Local appearance preferences remain device-local; team drafts are per-account browser data, not a cloud backup.
+Back up the old site data and preserve its encryption secret. Deploy this version to the same Netlify site/store. **V14 removes the first-owner migration claim entirely:** legacy single-tenant keys are no longer adopted by any account — pre-V14 deployments that completed their migration keep their account-scoped data exactly as it was; older shared keys simply stay put. Shared v6 session tokens no longer work. All accounts start Free and activate by email verification. Local appearance preferences remain device-local; team drafts are per-account browser data, not a cloud backup.
 
 ## Model access and budgets
 
