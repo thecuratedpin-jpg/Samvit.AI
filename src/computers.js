@@ -28,6 +28,9 @@ export async function renderComputers({main, api, esc, notify}) {
    <div class="panel spaced"><h3>Waiting for your decision</h3>
    <p class="intro">These actions were refused automatically because they need your approval. Nothing has happened on your computer yet.</p>
    <div id="action-list">Loading…</div></div>
+   <div class="panel spaced"><h3>Recent actions</h3>
+   <p class="intro">The latest work Samvit asked a computer to do, and what the computer actually observed.</p>
+   <div id="recent-actions">Loading…</div></div>
    <div class="panel spaced"><h3>Emergency stop</h3>
    <p id="stop-state">Checking…</p>
    <p class="intro">The emergency stop halts every paired computer and every account immediately. An operator configures <code>SAMVIT_OPERATOR_SECRET</code> to enable it.</p>
@@ -55,8 +58,17 @@ export async function renderComputers({main, api, esc, notify}) {
       const data = await api('/api/devices');
       if (!alive()) return;
       const devices = data.devices || [];
+      // Same staleness window the cloud uses (devices/dispatch.js): an agent
+      // that has not been seen within two touch windows is treated as dark.
+      const STALE_MS = 120000;
+      const presence = device => {
+        if (device.revoked) return '<span class="tag">DISCONNECTED</span>';
+        if (!device.lastSeenAt) return '<span class="tag">NEVER CONNECTED</span>';
+        return Date.now() - device.lastSeenAt <= STALE_MS ? '<span class="tag">ONLINE</span>' : '<span class="tag">OFFLINE</span>';
+      };
+      const nameOf = id => (devices.find(device => device.id === id)?.name) || 'a computer';
       $('#device-list').innerHTML = devices.length ? devices.map(device => `<article class="record">
-        <h3>${esc(device.name)} ${device.revoked ? '<span class="tag">DISCONNECTED</span>' : ''}</h3>
+        <h3>${esc(device.name)} ${presence(device)}</h3>
         <p>${esc(device.platform)} · ${esc(device.arch)} · ${device.lastSeenAt ? `last seen ${esc(new Date(device.lastSeenAt).toLocaleString())}` : 'never connected'}</p>
         ${folderEditor(device)}${commandEditor(device)}
         <div class="record-actions"><button class="secondary" data-revoke="${esc(device.id)}">${device.revoked ? 'Already disconnected' : 'Disconnect this computer'}</button></div>
@@ -64,13 +76,30 @@ export async function renderComputers({main, api, esc, notify}) {
 
       const waiting = (data.actions || []).filter(action => action.status === 'pending' && action.decision?.outcome === 'ASK_USER');
       $('#action-list').innerHTML = waiting.length ? waiting.map(action => `<article class="record">
-        <h3>${esc(action.capability)}</h3>
+        <h3>${esc(action.capability)} on ${esc(nameOf(action.deviceId))}${action.missionId ? ` · mission ${esc(String(action.missionId).slice(0, 8))}…` : ''}</h3>
         <p>${esc(action.decision?.detail || 'This action needs your approval.')}</p>
         <p><code>${esc(JSON.stringify(action.args))}</code></p>
         <div class="record-actions">
           <button class="primary" data-approve="${esc(action.id)}">Approve once</button>
           <button class="secondary" data-deny="${esc(action.id)}">Decline</button>
         </div></article>`).join('') : '<p>Nothing is waiting for you.</p>';
+
+      // What actually happened: the queue outcome plus the verification of
+      // what the computer observed. Timeouts and failures are shown as such —
+      // never rounded up into success.
+      const recent = (data.actions || []).filter(action => action.status !== 'pending' || action.decision?.outcome !== 'ASK_USER').slice(0, 12);
+      const stamp = action => {
+        if (action.status === 'completed') return action.verification?.status === 'verified' ? 'VERIFIED' : `UNVERIFIED (${action.verification?.reason || 'no proof'})`;
+        if (action.status === 'failed') return 'FAILED';
+        if (action.status === 'denied') return 'DECLINED';
+        if (action.status === 'expired') return 'NO RESPONSE';
+        return 'IN FLIGHT';
+      };
+      $('#recent-actions').innerHTML = recent.length ? recent.map(action => `<article class="record">
+        <h3>${esc(action.capability)} on ${esc(nameOf(action.deviceId))} <span class="tag">${esc(stamp(action))}</span></h3>
+        <p>${action.missionId ? `mission ${esc(String(action.missionId).slice(0, 8))}… · ` : ''}attempt ${action.attempts || 0} · ${esc(new Date(action.completedAt || action.dispatchedAt || action.createdAt).toLocaleString())}</p>
+        ${action.error ? `<p>${esc(action.error)}</p>` : ''}
+      </article>`).join('') : '<p>No actions yet — computers act only when a mission asks them to.</p>';
 
       const global = data.globalStop || {halted: false};
       $('#stop-state').textContent = global.halted ? `Emergency stop is ENGAGED${global.reason ? ` — ${global.reason}` : ''}.` : 'Emergency stop is not engaged.';

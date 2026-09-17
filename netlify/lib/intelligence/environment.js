@@ -182,6 +182,55 @@ export function verifyEnvironment({before, after, effects = []} = {}) {
   };
 }
 
+/**
+ * Fold the verifications the DEVICE QUEUE computed for a task's computer_*
+ * actions into the same record shape as sandbox environment verification.
+ *
+ * This is the local-PC half of observe → verify: each record comes from a
+ * real observation the agent reported (compared by the queue with what the
+ * action promised), never from the model's own claim. A promised effect the
+ * computer never confirmed is unresolved — and the mission must end
+ * 'partial', not 'completed'.
+ *
+ * Pure. `observations` items: {capability, actionId, expected, status,
+ * verification}. Read-only capabilities promise no effect and are skipped —
+ * absence of a promise can never be a failure.
+ */
+export function verifyDeviceObservations(observations = [], {deviceId = null} = {}) {
+  const promised = (Array.isArray(observations) ? observations : [])
+    .filter(entry => entry && entry.expected && typeof entry.expected === 'object');
+  if (!promised.length) return null;
+
+  const rows = promised.map(entry => {
+    const verified = entry.status === 'completed' && entry.verification?.status === 'verified';
+    return {
+      action: entry.capability || null,
+      actionId: entry.actionId || null,
+      path: entry.expected.path || null,
+      observed: verified,
+      note: verified
+        ? (entry.verification.reason || 'effect observed on the device')
+        : entry.status === 'timeout'
+          ? 'the computer never reported back'
+          : entry.verification?.reason || entry.status || 'no verification recorded'
+    };
+  });
+  const missing = rows.filter(row => !row.observed);
+  return {
+    status: missing.length ? 'unresolved' : 'verified',
+    method: 'device-observation',
+    deviceId,
+    checked: rows.length,
+    matched: rows.length - missing.length,
+    observations: rows.slice(0, 30),
+    missing: missing.slice(0, 20),
+    unexpected: [],
+    diff: null,
+    // Every promised effect was confirmed by the computer's own report.
+    independentlyProven: missing.length === 0
+  };
+}
+
 /** Fold several per-task environment verifications into one mission-level record. */
 export function mergeEnvironmentVerifications(reports = []) {
   const usable = reports.filter(report => report && report.status !== 'not-applicable');
@@ -190,9 +239,12 @@ export function mergeEnvironmentVerifications(reports = []) {
   const unexpected = [...new Set(usable.flatMap(report => report.unexpected || []))].slice(0, 20);
   const checked = usable.reduce((n, report) => n + (report.checked || 0), 0);
   const matched = usable.reduce((n, report) => n + (report.matched || 0), 0);
+  const methods = [...new Set(usable.map(report => report.method).filter(Boolean))];
+  const deviceIds = [...new Set(usable.map(report => report.deviceId).filter(Boolean))];
   return {
     status: missing.length ? 'unresolved' : 'verified',
-    method: 'environment-observation',
+    method: methods.length === 1 ? methods[0] : 'mixed-observation',
+    deviceIds,
     tasks: usable.length,
     checked,
     matched,

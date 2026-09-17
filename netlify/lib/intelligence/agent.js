@@ -14,17 +14,28 @@ export async function runAgent(ctx,task,input,{modelCall=callModel,toolCall=exec
  const availableNames=new Set(availableTools(ctx.env,ctx.grants).map(t=>t.name));
  const allowed=task.tools.filter(name=>availableNames.has(name));
  const tools=toolDefinitions(ctx.env,ctx.grants).filter(definition=>allowed.includes(definition.name));
- const history=[{role:'user',content:JSON.stringify({task:task.description,userGoal:ctx.goal,untrustedContext:input})}];const evidence=[],usedModels=[],effects=[];
+ const history=[{role:'user',content:JSON.stringify({task:task.description,userGoal:ctx.goal,untrustedContext:input})}];const evidence=[],usedModels=[],effects=[],deviceObservations=[];
  for(let step=0;step<ctx.limits.maxAgentSteps;step++){
   await ctx.assertActive();ctx.signal.throwIfAborted();
   const response=await modelCall(ctx,{system:AGENT_POLICY+(task.kind==='verify'?' Identify claims, disagreements and missing evidence. Return JSON with claims [{claim,status:supported|unsupported|conflict,sourceUrls:[],note}], summary and confidence:low|medium|high.':'')+(task.kind==='synthesis'?' Produce one coherent final answer, deduplicate, cite available source URLs and explicitly preserve unresolved disagreements and missing evidence.':''),history,tools,capability:task.capability,complexity:ctx.spec?.complexity||'high',avoid:step===0?ctx.avoid||[]:[]});
-  usedModels.push(response.target);ctx.preferredTarget=response.target;if(!response.calls.length){if(!response.content.trim())throw Error('Model returned no deliverable');return {output:response.content,evidence,models:[...new Set(usedModels)],effects,steps:step+1};}
+  usedModels.push(response.target);ctx.preferredTarget=response.target;if(!response.calls.length){if(!response.content.trim())throw Error('Model returned no deliverable');return {output:response.content,evidence,models:[...new Set(usedModels)],effects,device:deviceObservations,steps:step+1};}
   history.push({role:'assistant',content:response.content,calls:response.calls,native:response.native,nativeProvider:response.provider});
   for(let i=0;i<response.calls.length;i++){
    const call=response.calls[i];let result;const started=Date.now();
    try{if(!allowed.includes(call.name))throw Error('Tool not authorized for this task');result=await toolCall(call,{...ctx,effectId:`${ctx.jobId}_${task.id}_${step}_${i}`});if(['web_search','fetch_url'].includes(call.name))try{const parsed=JSON.parse(result.text);if(parsed.sources||parsed.url)evidence.push(parsed);}catch{}}catch{result={text:JSON.stringify({error:'Tool unavailable, denied, invalid, or failed. Revise your approach within authorized tools; do not claim success.'})};}
    const errored=result.text.includes('"error"');
-   await ctx.trace({kind:'tool',tool:call.name,status:errored?'failed':'completed',latencyMs:Date.now()-started});
+   // P4/P8: a computer_* result carries the real action id, the queue-computed
+   // verification and the promised effect — collect it for the runtime's
+   // environment verdict and make the trace attributable (action/device).
+   let deviceTrace={};
+   if(call.name.startsWith('computer_'))try{
+    const parsed=JSON.parse(result.text);
+    if(parsed&&parsed.environment==='local_pc'){
+     deviceTrace={actionId:parsed.actionId||null,deviceId:ctx.deviceId||null,capability:parsed.capability||null};
+     if(parsed.actionId)deviceObservations.push({capability:parsed.capability||call.name,actionId:parsed.actionId,status:parsed.status||'unknown',expected:parsed.expected||null,verification:parsed.verification||null});
+    }
+   }catch{}
+   await ctx.trace({kind:'tool',tool:call.name,status:errored?'failed':'completed',latencyMs:Date.now()-started,...deviceTrace});
    // A successful computer action promises an observable environment effect.
    // Recorded so runtime can verify the claim against real state afterwards.
    if(!errored){const effect=effectFor(call);if(effect)effects.push(effect);}

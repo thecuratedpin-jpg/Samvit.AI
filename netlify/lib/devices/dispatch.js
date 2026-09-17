@@ -26,8 +26,10 @@ import {expectationFor, DEVICE_CAPABILITIES} from '../../../shared/desktop.js';
 
 export const DEFAULT_WAIT_MS = 45000;
 export const DEFAULT_POLL_MS = 1500;
-// The agent polls every 3s, so a minute of silence means the computer is gone.
-export const STALE_AFTER_MS = 60000;
+// Presence is heartbeat-driven: the agent polls and the registry touches
+// lastSeenAt at most once a minute. Two missed touch windows means the
+// computer is gone — generous enough that a healthy agent never flaps.
+export const STALE_AFTER_MS = 120000;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -74,6 +76,71 @@ export async function listAvailableDevices(accountId, {now = Date.now()} = {}) {
   }));
 }
 
+// --------------------------------------------------------------------------
+// P1 — what a mission needs versus what a computer currently offers
+// --------------------------------------------------------------------------
+/**
+ * What one capability needs the device to already have. Pure — a capability
+ * never needs "more trust", it needs a specific kind of authorisation:
+ *   * read capabilities  → at least one folder authorised for reading
+ *   * write capabilities → at least one folder authorised for writing
+ *   * dev.run            → at least one approved command
+ *   * env.inspect        → nothing (it inspects only the agent itself)
+ */
+export function requirementFor(capability) {
+  const spec = DEVICE_CAPABILITIES.includes(capability) ? capability : null;
+  if (!spec) return null;
+  if (capability === 'env.inspect') return null;
+  if (capability === 'dev.run') return {kind: 'command', label: 'an approved development command (Computers page → Approved commands)'};
+  const mode = ({'fs.write': 1, 'fs.mkdir': 1, 'fs.move': 1, 'fs.copy': 1, 'fs.delete': 1})[capability] ? 'write' : 'read';
+  return {kind: 'scope', mode, label: mode === 'write' ? 'a folder authorised for reading AND writing' : 'a folder authorised for reading'};
+}
+
+/**
+ * The exact requirements a device does NOT currently satisfy for the given
+ * capabilities. Pure and deliberately precise: "no computer is online" and
+ * "the computer has no writable folder" lead a user to very different fixes.
+ *
+ * @param {object} device   the paired computer (scopes, approvedCommands, revoked, lastSeenAt)
+ * @param {string[]} capabilities  device capabilities the mission intends to use
+ * @returns {string[]} human-actionable gaps; empty when the device is ready
+ */
+export function missingRequirements(device, capabilities = [], {now = Date.now()} = {}) {
+  if (!device || typeof device !== 'object') return ['pair a computer first'];
+  const gaps = [];
+  if (device.revoked) gaps.push('the computer has been disconnected — pair it again');
+  const scopes = Array.isArray(device.scopes) ? device.scopes : [];
+  const hasRead = scopes.some(scope => scope && typeof scope.path === 'string');
+  const hasWrite = scopes.some(scope => scope && scope.mode === 'write');
+  const hasCommands = Array.isArray(device.approvedCommands) && device.approvedCommands.length > 0;
+  for (const capability of [...new Set(capabilities)]) {
+    const need = requirementFor(capability);
+    if (!need) continue;
+    if (need.kind === 'scope' && need.mode === 'write' && !hasWrite) gaps.push(`"${capability}" needs ${need.label}`);
+    if (need.kind === 'scope' && need.mode === 'read' && !hasRead) gaps.push(`"${capability}" needs ${need.label}`);
+    if (need.kind === 'command' && !hasCommands) gaps.push(`"${capability}" needs ${need.label}`);
+  }
+  return gaps;
+}
+
+/**
+ * A bounded, planner-facing summary of one computer. This is the ONLY
+ * discovery the planner gets: what the device offers, never a scan of it.
+ */
+export function deviceContextSummary(availability, {maxPaths = 6} = {}) {
+  if (!availability || availability.available !== true) return 'No usable computer is selected for this mission.';
+  const folders = (availability.authorisedFolders || []).slice(0, maxPaths).map(scope => `${scope.path} (${scope.mode})`).join('; ') || 'none';
+  const commands = (availability.approvedCommands || []).slice(0, maxPaths).join(', ') || 'none';
+  const presence = availability.online ? 'online now' : availability.neverConnected ? 'paired but has never connected' : 'appears offline';
+  return [
+    `Target computer: ${availability.name} (${availability.platform}/${availability.arch}), ${presence}.`,
+    `Environment: local_pc — a real computer, NOT Samvit's sandbox. Use computer_* tools for it; fs_* tools act on the sandbox.`,
+    `Authorised folders: ${folders}. Paths outside them are refused; do not attempt them.`,
+    `Approved commands: ${commands}. Other commands will pause for user approval or be refused.`,
+    `Available device capabilities: ${(availability.capabilities || []).join(', ')}.`
+  ].join(' ');
+}
+
 /**
  * Perform one structured action on a paired computer and wait for the real
  * observation.
@@ -90,6 +157,7 @@ export async function requestDeviceAction(accountId, {
   missionId = null,
   waitMs = DEFAULT_WAIT_MS,
   pollMs = DEFAULT_POLL_MS,
+  requireOnline = false,
   now = Date.now,
   sleepFn = sleep
 } = {}) {
@@ -97,6 +165,28 @@ export async function requestDeviceAction(accountId, {
   const device = await getDevice(accountId, deviceId);
   if (!device) throw Object.assign(Error('That computer is not paired with this workspace'), {reason: 'unknown_device'});
   if (device.revoked) throw Object.assign(Error('That computer has been disconnected'), {reason: 'device_revoked'});
+
+  // P6: fail fast instead of queueing work at a computer that is provably
+  // dark. Queueing and waiting out the lease timeout (×attempts) would burn
+  // the mission's time budget for a guaranteed no-response; an honest
+  // 'offline' lets the mission park and resume when the computer reconnects.
+  // Nothing is enqueued, so there is also nothing to retry wastefully.
+  if (requireOnline) {
+    const lastSeenAt = device.lastSeenAt || null;
+    const online = Boolean(lastSeenAt) && now() - lastSeenAt <= STALE_AFTER_MS;
+    if (!online) {
+      return {
+        status: 'offline',
+        deviceId,
+        deviceName: device.name,
+        lastSeenAt,
+        neverConnected: !lastSeenAt,
+        detail: lastSeenAt
+          ? `"${device.name}" has not reported in for over ${Math.round(STALE_AFTER_MS / 60000)} minute(s) and appears to be offline`
+          : `"${device.name}" is paired but its agent has never connected — start it with: node agent/main.js`
+      };
+    }
+  }
 
   const decision = await authorizeLocalAction(accountId, {capability, args, device, confirmed});
   if (decision.outcome === 'DENY') {

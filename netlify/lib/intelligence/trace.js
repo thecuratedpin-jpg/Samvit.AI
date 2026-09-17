@@ -24,7 +24,7 @@ export const TRACE_LIMIT = 160;
 export const TRACE_KINDS = Object.freeze(['plan', 'task', 'model', 'tool', 'action', 'observation', 'verification', 'retry', 'status', 'safety', 'experience']);
 
 // Field set a trace entry may carry. Everything else is discarded.
-const ALLOWED_FIELDS = Object.freeze(['at', 'kind', 'status', 'tool', 'model', 'provider', 'action', 'level', 'levelName', 'task', 'reason', 'latencyMs', 'estimatedMicroUsd', 'usage', 'attempt', 'note']);
+const ALLOWED_FIELDS = Object.freeze(['at', 'kind', 'status', 'tool', 'model', 'provider', 'action', 'level', 'levelName', 'task', 'reason', 'latencyMs', 'estimatedMicroUsd', 'usage', 'attempt', 'note', 'deviceId', 'actionId', 'capability']);
 
 const FORBIDDEN_KEY = /^(reasoning|reasoning_content|thought|thoughts|thinking|chain_of_thought|chainofthought|scratchpad|cot|internal_monologue|hidden)$/i;
 
@@ -65,7 +65,13 @@ export function traceEntry(entry = {}, now = Date.now()) {
     latencyMs: Number.isFinite(output.latencyMs) ? Math.max(0, Math.round(output.latencyMs)) : null,
     estimatedMicroUsd: Number.isFinite(output.estimatedMicroUsd) ? Math.max(0, Math.round(output.estimatedMicroUsd)) : null,
     attempt: Number.isInteger(output.attempt) ? output.attempt : null,
-    note: short(output.note, 240)
+    note: short(output.note, 240),
+    // P8: what ran on WHICH computer for WHICH queue action — the fields that
+    // make "Samvit is doing X on Device Y because mission Z requires it"
+    // answerable from the trace alone. Ids only; never payloads.
+    deviceId: short(output.deviceId, 40),
+    actionId: short(output.actionId, 40),
+    capability: short(output.capability, 24)
   };
 }
 

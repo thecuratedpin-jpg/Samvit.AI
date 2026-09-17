@@ -56,10 +56,15 @@ export async function runOnce(transport, {log = () => {}, execute = executeActio
         approvedCommands: policy.approvedCommands || [],
         ...(host ? {host} : {})
       });
-      await transport.complete(action.id, {observation, report: result});
+      // Durable receipt FIRST, report second. The dangerous crash window is
+      // "effect happened, report never landed": if the receipt were written
+      // only after a successful report, that window would re-execute the
+      // operation on redelivery. Written before, any later crash replays the
+      // receipt instead of performing the effect twice.
       if (receipts && shouldRecord(action.capability)) {
         receipts.put(action.id, {capability: action.capability, observation, report: result});
       }
+      await transport.complete(action.id, {observation, report: result});
       executed++;
       log(`ok    ${action.capability}${result ? ` -> ${JSON.stringify(result).slice(0, 200)}` : ''}`);
     } catch (error) {

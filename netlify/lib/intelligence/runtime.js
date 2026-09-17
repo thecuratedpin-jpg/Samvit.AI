@@ -13,7 +13,8 @@ import {readSafety} from './permissions.js';
 import {appendTrace} from './trace.js';
 import {recordExperience,worldState} from './world-state.js';
 import {snapshot as snapshotEnvironment} from './vfs.js';
-import {verifyEnvironment,mergeEnvironmentVerifications} from './environment.js';
+import {verifyEnvironment,verifyDeviceObservations,mergeEnvironmentVerifications} from './environment.js';
+import {deviceAvailability,deviceContextSummary} from '../devices/dispatch.js';
 export async function runJob(accountId,id,env,{modelCall=callModel,agent=runAgent,now=()=>Date.now()}={}){
  const store=getStore(JOB_STORE),key=jobKey(accountId,id),token=crypto.randomUUID();let job;
  const {value:claimed}=await casUpdate(store,key,r=>{
@@ -51,7 +52,18 @@ export async function runJob(accountId,id,env,{modelCall=callModel,agent=runAgen
   }catch{/* experience is an optimisation, never a prerequisite */}
   if(first.calculation){await update(r=>({...r,status:'completed',output:String(first.calculation.result),verification:{status:'verified',method:'deterministic-arithmetic'},notification:'Mission completed'}));return {claimed:true};}
   const complete=async(system,prompt)=>(await modelCall(ctx,{system,history:[{role:'user',content:prompt}],complexity:'high'})).content;
-  if(!job.tasks.length){let planned;for(let attempt=0;attempt<2;attempt++){try{planned=await analyzeAndPlan(job.goal,{complete,toolNames:availableTools(env,job.grants).map(t=>t.name),limits:job.limits,hints});break;}catch(e){if(attempt)throw e;await ctx.trace({kind:'plan',status:'retry',reason:'invalid_or_unavailable_plan'});}}
+  // P1: a mission targeting a computer plans against what THAT computer can
+  // actually do — its presence, authorised folders and approved commands.
+  // This is the only discovery it gets; nothing here scans the machine.
+  let deviceNote=null;
+  if(job.deviceId){
+   try{
+    const availability=await deviceAvailability(accountId,job.deviceId);
+    deviceNote=deviceContextSummary(availability);
+    await ctx.trace({kind:'status',status:availability.online?'device-online':'device-offline',deviceId:job.deviceId,note:`Mission targets "${availability.name||job.deviceId}" (${availability.platform||'unknown'}), ${availability.online?'online':'not currently online'}`});
+   }catch{deviceNote=null;}
+  }
+  if(!job.tasks.length){let planned;for(let attempt=0;attempt<2;attempt++){try{planned=await analyzeAndPlan(job.goal,{complete,toolNames:availableTools(env,job.grants).map(t=>t.name),limits:job.limits,hints,deviceNote});break;}catch(e){if(attempt)throw e;await ctx.trace({kind:'plan',status:'retry',reason:'invalid_or_unavailable_plan'});}}
    await update(r=>({...r,spec:planned.spec,tasks:planned.plan.tasks.map(t=>({...t,status:'pending',attempts:0,createdAt:now()}))}));
   }
   ctx.spec=job.spec;
@@ -84,12 +96,17 @@ export async function runJob(accountId,id,env,{modelCall=callModel,agent=runAgen
      const result=await agent(local,task,input,{modelCall});
      const allEvidence=[...evidence,...result.evidence];let verification;
      if(task.kind==='verify')verification=verifyClaims(result.output,allEvidence,{freshness:job.spec.freshness_required});
-     let environment=null;
+     // Phase 9 observe→verify, both environments: the VFS diff covers sandbox
+     // tools; the queue's verification covers actions on the paired computer.
+     // Either one unresolved means the mission must not report full success.
+     let vfsEnvironment=null;
      if(before){
       const after=await snapshotEnvironment(accountId).catch(()=>null);
-      if(after)environment=verifyEnvironment({before,after,effects:result.effects||[]});
-      if(environment&&environment.status!=='not-applicable')await ctx.trace({kind:'verification',status:environment.status,action:'environment-observation',reason:environment.missing.length?`${environment.missing.length} promised change(s) not observed`:`${environment.checked} change(s) confirmed`});
+      if(after)vfsEnvironment=verifyEnvironment({before,after,effects:result.effects||[]});
      }
+     const deviceEnvironment=verifyDeviceObservations(result.device||[],{deviceId:ctx.deviceId||job.deviceId||null});
+     const environment=mergeEnvironmentVerifications([vfsEnvironment,deviceEnvironment].filter(Boolean));
+     if(environment)await ctx.trace({kind:'verification',status:environment.status,action:'environment-observation',deviceId:environment.deviceIds?.[0]||null,reason:environment.missing.length?`${environment.missing.length} promised change(s) not observed`:`${environment.checked} change(s) confirmed against real state`});
      await update(r=>({...r,tasks:r.tasks.map(t=>t.id===task.id?{...t,...result,evidence:allEvidence.slice(-20),verification,environment,status:'completed',completedAt:now()}:t)}));
     }catch(e){
      // A decision request is not a failure. The task stays pending so it

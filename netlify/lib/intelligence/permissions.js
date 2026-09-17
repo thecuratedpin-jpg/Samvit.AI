@@ -161,7 +161,8 @@ export async function recordAction(accountId, entry = {}) {
     level: Number.isInteger(entry.level) ? entry.level : null,
     levelName: entry.levelName || null,
     outcome: entry.outcome || null,
-    reason: entry.reason || null
+    reason: entry.reason || null,
+    deviceId: typeof entry.deviceId === 'string' ? entry.deviceId.slice(0, 40) : null
   };
   const {value} = await casUpdate(accountStore(SAFETY_STORE, accountId), 'audit', current => {
     const rows = Array.isArray(current?.rows) ? current.rows : [];

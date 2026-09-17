@@ -85,8 +85,36 @@ async function dispatchToDevice(capability, args, context) {
     capability,
     args,
     confirmed: context.confirmed || [],
-    missionId: context.jobId || null
+    missionId: context.jobId || null,
+    requireOnline: true
   });
+  if (result.status === 'offline') {
+    // P6: an offline computer is not a failure and not something to spin
+    // retries against. The mission parks in WAITING_FOR_USER; each park is a
+    // fresh, deterministic decision id so every answer is distinct and
+    // auditable. Choosing to stop ends the mission honestly — no fake
+    // success, no silent substitute sandbox.
+    const base = `device-offline:${context.jobId}:${context.deviceId}`;
+    const previous = Object.entries(context.decisions || {}).filter(([key]) => key === base || key.startsWith(base + ':'));
+    const stopped = previous.find(([, answer]) => /^(stop|cancel|end)/i.test(String(answer).trim()));
+    if (stopped) throw Error(`Mission stopped: ${result.detail}. You chose to stop rather than keep waiting.`);
+    const id = previous.length ? `${base}:${previous.length}` : base;
+    throw Object.assign(
+      Error(`${result.detail}. The mission is paused; it will resume from its checkpoint.`),
+      {
+        reason: 'awaiting_user_decision',
+        decision: {
+          id,
+          question: `${result.detail}. What should Samvit do?`,
+          why: `The mission needs "${result.deviceName || 'your computer'}" for the next step (${capability}). Nothing was queued or attempted while it is unreachable.`,
+          options: [
+            {id: 'wait', label: 'Keep waiting', detail: 'Start the agent on that computer, then answer this to resume the mission from its checkpoint.'},
+            {id: 'stop', label: 'Stop the mission', detail: 'End it here. Already-completed steps are kept and recorded.'}
+          ]
+        }
+      }
+    );
+  }
   if (result.status === 'awaiting_decision') {
     throw Object.assign(
       Error(result.detail || `Waiting for your decision before ${capability} runs on your computer`),

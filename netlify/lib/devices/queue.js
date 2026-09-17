@@ -20,6 +20,10 @@ export const DEVICE_STORE = 'samvit-devices';
 export const MAX_ACTIONS = 100;
 export const DEFAULT_LEASE_MS = 60000;
 export const MAX_ATTEMPTS = 3;
+// Outstanding work for ONE computer is bounded separately from the history
+// bound: a mission (or a bug) must not be able to pile unbounded pending
+// work onto a computer that may be offline. Completed history is unaffected.
+export const MAX_OUTSTANDING_PER_DEVICE = 25;
 
 const terminal = status => ['completed', 'failed', 'denied', 'expired'].includes(status);
 
@@ -47,9 +51,14 @@ export async function enqueueAction(accountId, {deviceId, capability, args, expe
     verification: null,
     error: null
   };
-  await casUpdate(accountStore(DEVICE_STORE, accountId), 'actions', current => ({
-    rows: [...(current?.rows || []), record].slice(-MAX_ACTIONS)
-  }));
+  await casUpdate(accountStore(DEVICE_STORE, accountId), 'actions', current => {
+    const rows = current?.rows || [];
+    const outstanding = rows.filter(row => row.deviceId === deviceId && !terminal(row.status)).length;
+    if (outstanding >= MAX_OUTSTANDING_PER_DEVICE) {
+      throw Error(`That computer already has ${MAX_OUTSTANDING_PER_DEVICE} actions outstanding. Let it catch up, or reconnect it if it is offline.`);
+    }
+    return {rows: [...rows, record].slice(-MAX_ACTIONS)};
+  });
   return record;
 }
 

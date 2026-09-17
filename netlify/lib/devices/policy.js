@@ -135,7 +135,8 @@ export async function authorizeLocalAction(accountId, {capability, args, device,
         level: decision.level ?? null,
         levelName: decision.levelName || null,
         outcome: decision.outcome,
-        reason: decision.reason || null
+        reason: decision.reason || null,
+        deviceId: device?.id || null
       });
     } catch { /* the queue record remains the authoritative action log */ }
   }

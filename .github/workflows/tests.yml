@@ -1,0 +1,41 @@
+# SAMVIT — test matrix.
+#
+# The Windows path hardening in shared/desktop.js is intentionally
+# Windows-specific. The suite is platform-aware rather than weakened:
+#
+#   * windows-latest  runs the executor/agent tests on the NATIVE path —
+#                     real temp directories, real junction behaviour, the
+#                     genuine end-to-end filesystem pipeline.
+#   * ubuntu-latest   runs the SAME tests through the executor's POSIX host
+#                     bridge, so every containment rule is still exercised;
+#                     only the final syscall path is mapped.
+#
+# Both jobs run the identical command. A failure on either is a real failure.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: npm test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is listed first deliberately: it is the platform the
+        # desktop agent targets, and its job is a requirement, not an extra.
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Full suite (${{ matrix.os }})
+        run: npm test
+      - name: Build + import check
+        run: npm run build
