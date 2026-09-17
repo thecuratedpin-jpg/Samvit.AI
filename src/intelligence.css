@@ -1,0 +1,7 @@
+#universal-form { display: grid; gap: 16px; }
+#universal-form textarea, #universal-form select, #universal-form input[type=number] { width: 100%; min-width: 0; }
+#universal-form summary { cursor: pointer; padding: 8px 0; }
+#universal-form details label { display: block; margin: 12px 0; }
+#universal-form input[type=checkbox] { width: auto; margin-right: 8px; }
+.mission-output { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; }
+#universal-history button, #universal-progress p, #universal-artifacts button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }

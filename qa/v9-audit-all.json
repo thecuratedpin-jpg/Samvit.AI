@@ -1,0 +1,154 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "@netlify/dev": {
+      "name": "@netlify/dev",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "@netlify/images"
+      ],
+      "effects": [
+        "netlify-cli"
+      ],
+      "range": ">=4.2.0",
+      "nodes": [
+        "node_modules/@netlify/dev"
+      ],
+      "fixAvailable": {
+        "name": "netlify-cli",
+        "version": "23.13.5",
+        "isSemVerMajor": true
+      }
+    },
+    "@netlify/images": {
+      "name": "@netlify/images",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "ipx"
+      ],
+      "effects": [
+        "@netlify/dev",
+        "netlify-cli"
+      ],
+      "range": "*",
+      "nodes": [
+        "node_modules/@netlify/images"
+      ],
+      "fixAvailable": {
+        "name": "netlify-cli",
+        "version": "23.13.5",
+        "isSemVerMajor": true
+      }
+    },
+    "ipx": {
+      "name": "ipx",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        "sharp"
+      ],
+      "effects": [
+        "@netlify/images"
+      ],
+      "range": "<=4.0.0-alpha.1",
+      "nodes": [
+        "node_modules/ipx"
+      ],
+      "fixAvailable": {
+        "name": "netlify-cli",
+        "version": "23.13.5",
+        "isSemVerMajor": true
+      }
+    },
+    "netlify-cli": {
+      "name": "netlify-cli",
+      "severity": "high",
+      "isDirect": true,
+      "via": [
+        "@netlify/dev",
+        "@netlify/images"
+      ],
+      "effects": [],
+      "range": ">=23.14.0",
+      "nodes": [
+        "node_modules/netlify-cli"
+      ],
+      "fixAvailable": {
+        "name": "netlify-cli",
+        "version": "23.13.5",
+        "isSemVerMajor": true
+      }
+    },
+    "sharp": {
+      "name": "sharp",
+      "severity": "high",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1124066,
+          "name": "sharp",
+          "dependency": "sharp",
+          "title": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591",
+          "url": "https://github.com/advisories/GHSA-f88m-g3jw-g9cj",
+          "severity": "high",
+          "cwe": [
+            "CWE-1395"
+          ],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<0.35.0"
+        },
+        {
+          "source": 1193725,
+          "name": "sharp",
+          "dependency": "sharp",
+          "title": "sharp: Vulnerabilities in libheif: GHSA-g89c-p67h-r497 and GHSA-2jg2-4ch7-h545",
+          "url": "https://github.com/advisories/GHSA-rgj7-g3m4-5g8c",
+          "severity": "high",
+          "cwe": [
+            "CWE-122"
+          ],
+          "cvss": {
+            "score": 0,
+            "vectorString": null
+          },
+          "range": "<0.35.4"
+        }
+      ],
+      "effects": [
+        "ipx"
+      ],
+      "range": "<=0.35.4-rc.0",
+      "nodes": [
+        "node_modules/sharp"
+      ],
+      "fixAvailable": {
+        "name": "netlify-cli",
+        "version": "23.13.5",
+        "isSemVerMajor": true
+      }
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 5,
+      "critical": 0,
+      "total": 5
+    },
+    "dependencies": {
+      "prod": 78,
+      "dev": 1137,
+      "optional": 66,
+      "peer": 0,
+      "peerOptional": 0,
+      "total": 1214
+    }
+  }
+}

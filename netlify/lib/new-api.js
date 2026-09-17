@@ -1,0 +1,13 @@
+import {getStore} from '@netlify/blobs';
+import {requireSession,checkRateLimit,clientIdentifier,timingSafeEqual} from './security.js';
+export const nodeEnv={get:k=>process.env[k]};
+export const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
+export async function readBody(req,limit=40000){const reader=req.body?.getReader();if(!reader)throw new Error('Expected a JSON body.');let size=0,text='';const decoder=new TextDecoder();try{for(;;){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>limit){await reader.cancel();throw new Error('Request is too large.');}text+=decoder.decode(value,{stream:true});}text+=decoder.decode();const body=JSON.parse(text);if(!body||typeof body!=='object'||Array.isArray(body))throw new Error('Expected a JSON object.');return body;}finally{reader.releaseLock();}}
+export async function authorize(req,env,context={},admin=false){
+ const auth=await requireSession(req,env);if(!auth.ok)return {response:json({error:auth.message},auth.status)};
+ const origin=req.headers.get('origin');if(req.method!=='GET'&&origin&&origin!==new URL(req.url).origin)return {response:json({error:'Invalid request origin.'},403)};
+ try{const rl=await checkRateLimit(getStore('samvit-ratelimits'),`v6:${admin?'admin:':''}${auth.accountId}:${clientIdentifier(req,context)}`,{windowMs:60000,max:admin?8:30});if(rl.degraded)return {response:json({error:'Usage controls unavailable.'},503)};if(!rl.allowed)return {response:json({error:'Too many requests. Try again shortly.'},429)};}catch{return {response:json({error:'Usage controls unavailable.'},503)};}
+ if(admin&&auth.open){const code=env.get('SAMVIT_CONNECTIONS_ADMIN_CODE');if(!code||code.length<16)return {response:json({error:'The workspace owner must configure a connection-management code of at least 16 characters.'},503)};if(!timingSafeEqual(req.headers.get('x-samvit-admin-code')||'',code))return {response:json({error:'Enter the workspace owner’s connection-management code.'},403)};}
+ return {auth};
+}
+export function sseResponse(request,run){let closed=false;const abort=new AbortController(),signal=AbortSignal.any([request.signal,abort.signal]);const stream=new ReadableStream({async start(controller){const send=data=>{if(!closed&&!signal.aborted)controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`));};try{await run(send,signal);}catch{send({error:'This run could not finish. Your partial output is preserved.'});}finally{if(!closed){closed=true;controller.close();}}},cancel(){closed=true;abort.abort();}});return new Response(stream,{headers:{'content-type':'text/event-stream','cache-control':'no-cache, no-transform'}});}

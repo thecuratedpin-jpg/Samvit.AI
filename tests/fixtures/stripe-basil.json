@@ -1,0 +1,1 @@
+{"api_version":"2025-03-31.basil","id":"evt_basil","created":100,"livemode":false,"type":"customer.subscription.updated","data":{"object":{"id":"sub_new","customer":"cus_owner","livemode":false,"status":"active","cancel_at_period_end":true,"items":{"data":[{"quantity":1,"price":{"id":"price_ultra"},"current_period_start":1700000000,"current_period_end":1800000000}]}}}}

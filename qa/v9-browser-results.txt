@@ -1,0 +1,3 @@
+PASS browser-v9: real frontend with API fixtures; create/pause/resume/cancel, escaped output, mobile, legacy navigation.
+PASS browser-v8: desktop/mobile sign-in under status/setup outage; no overflow or browser errors.
+Not a live deployed provider or payment test.

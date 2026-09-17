@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#242323"><meta name="description" content="Samvit Agent Studio — give each AI a role, pass the work forward, and bring it together within your account budget.">
+  <title>Samvit Agent Studio</title>
+  <link rel="icon" href="src/mark.svg" type="image/svg+xml"><link rel="stylesheet" href="src/styles.css">
+  <script type="module" src="src/app.js"></script>
+  <link rel="stylesheet" href="src/intelligence.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to workspace</a>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <a href="#assistant" class="brand" aria-label="Samvit home"><img src="src/mark.svg" alt="" width="34" height="34">samvit<span class="beta">BETA</span></a>
+    <button class="new-chat" id="new-chat"><span>+</span> New conversation <kbd>⌘ K</kbd></button>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="Workspace">
+      <a href="#assistant" data-page="assistant"><span class="nav-icon">✳</span> Ask Samvit</a>
+      <a href="#agents" data-page="agents"><span class="nav-icon">◈</span> Agent studio</a>
+      <a href="#chat" data-page="chat"><span class="nav-icon">◯</span> Chat <span class="nav-tail">↗</span></a>
+      <a href="#models" data-page="models"><span class="nav-icon">✳</span> Model library <span class="count">10</span></a>
+      <a href="#council" data-page="council"><span class="nav-icon">◈</span> AI Council</a>
+      <a href="#missions" data-page="missions"><span class="nav-icon">☷</span> Goal planner</a>
+      <a href="#projects" data-page="projects"><span class="nav-icon">▱</span> Projects</a>
+      <a href="#computers" data-page="computers"><span class="nav-icon">▣</span> Computers</a>
+      <a href="#memory" data-page="memory"><span class="nav-icon">❋</span> Memory</a>
+    </nav>
+    <div class="nav-label recent-label">RECENT CONVERSATIONS <button id="refresh-history" aria-label="Refresh conversations">↻</button></div>
+    <div id="history" class="history"><p>Your next idea starts here.</p></div>
+    <div class="sidebar-bottom">
+      <a href="#plans" class="plan-card"><span class="plan-star">✳</span><strong>Build a bigger team</strong><p>2, 3 or 4 agents working together</p><span>View plans <b>↗</b></span></a>
+      <a href="#connections" class="utility" data-page="connections">↗ <span>Connections</span></a>
+      <a href="#setup" class="utility" data-page="setup">✓ <span>Setup check</span></a>
+      <a href="#appearance" class="utility" data-page="appearance">✧ <span>Your workspace</span></a>
+      <a href="#analytics" class="utility">◴ <span>Usage & insights</span></a>
+      <a href="#settings" class="profile"><span class="avatar">S</span><span><strong>Your workspace</strong><small id="plan-label">Checking connection…</small></span><span>⚙</span></a>
+    </div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><button id="menu-toggle" class="icon-button mobile-only" aria-label="Toggle navigation" aria-expanded="false">☰</button><div class="breadcrumb">Workspace <span>/</span> <strong id="page-label">Agent studio</strong></div><div class="top-actions"><span id="connection" class="connection">Connecting</span><button class="secondary" id="persistent-signin" type="button">Sign in</button><button class="icon-button" id="voice-toggle" type="button" aria-label="Voice input" aria-pressed="false" title="Voice input · opt-in, not always listening">◉</button><button class="icon-button" id="theme-toggle" aria-label="Toggle dark theme">◐</button></div></header>
+    <div id="notice" role="status" class="notice" hidden></div>
+    <main id="main" tabindex="-1"></main>
+    <footer class="footer"><span>Different roles. One finished idea.</span><span>SAMVIT <span class="tiny-mark">✳</span></span></footer>
+  </div>
+</div>
+<dialog id="login-dialog"><form id="login-form"><img src="src/mark.svg" width="42" height="42" alt=""><h2>Your ideas. Your account.</h2><p>Sign in or create your private Samvit account.</p><label>Email<input id="account-email" type="email" required autocomplete="email" maxlength="254"></label><label>Password<input id="account-password" type="password" required minlength="12" maxlength="128" autocomplete="current-password"></label><label id="invitation-label" hidden>Invitation or owner claim code<input id="access-code" type="password" autocomplete="off"></label><p id="login-error" role="alert"></p><button class="primary" type="submit">Sign in →</button><button class="secondary" type="button" id="account-mode">Create an account</button><button class="secondary" type="button" id="account-recovery">Verify email, reset password or re-enable</button><button class="secondary" type="button" id="explore-demo">Explore the interface</button></form></dialog>
+<div id="toast" role="status" class="toast" hidden></div>
+</body></html>

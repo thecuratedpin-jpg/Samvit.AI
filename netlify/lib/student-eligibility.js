@@ -1,0 +1,6 @@
+import {getStore} from '@netlify/blobs';
+export const STUDENT_STORE='samvit-student-verification';
+export function studentDiscountCoupon(env){const coupon=env.get('STRIPE_STUDENT_DISCOUNT_COUPON_ID')||'';return /^[A-Za-z0-9_-]{1,100}$/.test(coupon)?coupon:null;}
+export async function getStudentRecord(accountId){if(!accountId)return null;return getStore(STUDENT_STORE).get('student:'+accountId,{type:'json',consistency:'strong'});}
+export function hasVerifiedStudentEligibility(accountId,record,now=Date.now()){return Boolean(accountId&&record?.accountId===accountId&&record.status==='verified'&&record.expiresAt>now&&record.verifiedAt<=now&&record.reference&&record.verifier);}
+export async function studentDiscountStatus(accountId,env){let record;try{record=await getStudentRecord(accountId);}catch{return {verified:false,checkoutReady:false,status:'unavailable',discountPercent:0};}const verified=hasVerifiedStudentEligibility(accountId,record),couponConfigured=Boolean(studentDiscountCoupon(env));return {verified,status:record?.status||'not_requested',expiresAt:record?.expiresAt||null,discountPercent:verified?30:0,checkoutReady:verified&&couponConfigured,missingConfiguration:verified&&!couponConfigured?['STRIPE_STUDENT_DISCOUNT_COUPON_ID']:[]};}

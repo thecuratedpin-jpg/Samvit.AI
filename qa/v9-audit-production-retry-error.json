@@ -1,0 +1,28 @@
+{
+  "message": "403 Forbidden - POST https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+  "method": "POST",
+  "uri": "https://registry.npmjs.org/-/npm/v1/security/advisories/bulk",
+  "headers": {
+    "content-type": [
+      "text/plain"
+    ],
+    "x-proxy-error": [
+      "blocked-by-allowlist"
+    ],
+    "content-length": [
+      "24"
+    ],
+    "date": [
+      "Wed, 16 Sep 2026 09:06:24 GMT"
+    ],
+    "x-fetch-attempts": [
+      "1"
+    ]
+  },
+  "statusCode": 403,
+  "body": "Domain not in allowlist.",
+  "error": {
+    "summary": "",
+    "detail": ""
+  }
+}

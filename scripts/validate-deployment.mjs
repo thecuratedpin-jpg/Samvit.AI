@@ -1,0 +1,17 @@
+// Read-only checks against an operator-supplied deployment and Stripe TEST account.
+// Does not create customers, charges, subscriptions, portal configs or webhook events.
+import {billingEnabled,stripeClient,priceMap,nodeEnv as env} from '../netlify/lib/checkout.js';
+import {PLAN_CAPABILITIES} from '../shared/models.js';
+import {RISK_EVENTS} from '../netlify/lib/payment-risk.js';
+const required=['SAMVIT_PUBLIC_ORIGIN','STRIPE_SECRET_KEY','STRIPE_PRICE_ID_MAP','SAMVIT_BILLING_ENABLED'];
+const missing=required.filter(k=>!process.env[k]);if(missing.length){console.error('NOT RUN: configure '+missing.join(', '));process.exit(2);}
+const origin=new URL(process.env.SAMVIT_PUBLIC_ORIGIN);if(origin.protocol!=='https:'||origin.username||origin.password||origin.pathname!=='/'||origin.search||origin.hash||!billingEnabled(env)){console.error('REFUSED: use a root HTTPS deployment origin and enabled Stripe test key only.');process.exit(2);}
+let failures=0;const check=async(name,fn)=>{try{await fn();console.log('PASS '+name);}catch(e){failures++;console.error('FAIL '+name+': '+e.message);}};
+for(const path of ['/api/setup','/api/status'])await check('deployed '+path,async()=>{const r=await fetch(origin.origin+path,{redirect:'error',signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('HTTP '+r.status);const b=await r.json();if(path.endsWith('setup')&&!b.ready)throw Error('Required setup steps remain');if(path.endsWith('status')&&b.authenticated)throw Error('Anonymous request is unexpectedly authenticated');});
+const stripe=stripeClient(env),map=priceMap(env);
+await check('all paid plan prices configured',async()=>{for(const id of ['pro','ultra','ultimate'])if(!Object.values(map).includes(id))throw Error('Missing '+id);});
+for(const [id,plan] of Object.entries(map))await check('test monthly price for '+plan,async()=>{const p=await stripe.prices.retrieve(id);if(p.livemode!==false||!p.active||p.currency!=='usd'||p.recurring?.interval!=='month'||p.recurring?.interval_count!==1||p.unit_amount!==PLAN_CAPABILITIES[plan].pricing.monthlyUsd*100)throw Error('Price differs from advertised monthly plan');});
+await check('test webhook destination and event coverage',async()=>{const rows=await stripe.webhookEndpoints.list({limit:100});if(rows.has_more)throw Error('More than 100 endpoints; inspect manually');const endpoint=rows.data.find(e=>e.url===origin.origin+'/api/billing-webhook'&&e.status==='enabled'&&e.livemode===false);if(!endpoint)throw Error('No enabled test webhook matches deployment');for(const type of ['customer.subscription.created','customer.subscription.updated','customer.subscription.deleted','invoice.paid','invoice.payment_failed',...RISK_EVENTS])if(!endpoint.enabled_events.includes('*')&&!endpoint.enabled_events.includes(type))throw Error('Missing event '+type);});
+await check('active test portal configuration',async()=>{const result=await stripe.billingPortal.configurations.list({limit:100,is_default:true});const p=result.data.find(x=>x.active&&!x.livemode);if(!p||!p.features?.subscription_cancel?.enabled||!p.features?.payment_method_update?.enabled)throw Error('Enable cancellation and payment-method updates in default test portal');});
+console.log('NOT VERIFIED by this script: email delivery, SheerID end-to-end proof, signed webhook delivery, interactive checkout/portal, dunning, refund/dispute lifecycle, scheduled jobs and retention. Run PRE-MONEY-V8.md scenarios. Live billing remains blocked.');
+process.exitCode=failures?1:0;
