@@ -30,17 +30,45 @@ export const MAX_READ_BYTES = 400000;
 export const MAX_LIST_ENTRIES = 500;
 export const MAX_OUTPUT_BYTES = 200000;
 
+// --------------------------------------------------------------------------
+// Host path bridge (test seam — NOT a security rule change)
+// --------------------------------------------------------------------------
+// Every containment decision in this module is computed on WINDOWS-canonical
+// paths from shared/desktop.js. The only thing a `host` bridge changes is
+// WHERE the bytes actually land when a syscall happens:
+//
+//   * toHostPath(winForm)  — the real path the OS call should use
+//   * fromHostPath(real)   — the Windows-canonical form of a path the OS
+//                            returned (e.g. realpath), so containment can be
+//                            re-checked exactly as production does
+//
+// Production on Windows uses the identity bridge below. Tests on
+// non-Windows hosts inject a bridge that maps synthetic drive letters onto
+// a temporary directory, so the FULL containment pipeline (canonicalise →
+// scope check → realpath → re-check) is exercised unchanged everywhere.
+// `shared/desktop.js` is not modified and no rule is weakened.
+export const nativeHost = Object.freeze({
+  name: 'native',
+  toHostPath: path => path,
+  fromHostPath: path => path
+});
+
+/** Windows-form join: the executor's internal representation is always canonical-form. */
+const winJoin = (base, child) => (base.endsWith('\\') ? base + child : `${base}\\${child}`);
+
 const text = buffer => buffer.toString('utf8');
 
 /** Walk up to the nearest existing ancestor, resolve it, then re-append. */
-async function realpathOfNearestExisting(target) {
+async function realpathOfNearestExisting(target, host) {
   const parts = canonicalPath(target).split('\\');
   for (let i = parts.length; i >= 1; i--) {
     const candidate = i === 1 ? `${parts[0]}\\` : parts.slice(0, i).join('\\');
     try {
-      const real = await fs.realpath(candidate);
+      // Resolve on the host, then map the answer BACK to canonical form so
+      // the second containment check sees exactly what production sees.
+      const real = host.fromHostPath(await fs.realpath(host.toHostPath(candidate)));
       const tail = parts.slice(i).join('\\');
-      return tail ? join(real, tail) : real;
+      return tail ? winJoin(real, tail) : real;
     } catch { /* keep walking up */ }
   }
   throw Error('That path cannot be resolved on this computer');
@@ -50,12 +78,12 @@ async function realpathOfNearestExisting(target) {
  * Containment that survives symlinks and junctions.
  * Returns {allowed, path, real} or a refusal.
  */
-export async function containedPath(target, scopes, needed = 'read') {
+export async function containedPath(target, scopes, needed = 'read', host = nativeHost) {
   const pre = checkScopeAccess(scopes, target, needed);
   if (!pre.allowed) return pre;
   let real;
   try {
-    real = await realpathOfNearestExisting(pre.path);
+    real = await realpathOfNearestExisting(pre.path, host);
   } catch (error) {
     return {allowed: false, reason: 'unresolvable_path', detail: error.message};
   }
@@ -66,8 +94,8 @@ export async function containedPath(target, scopes, needed = 'read') {
   return {allowed: true, path: pre.path, real: post.path, mode: pre.mode};
 }
 
-const assertContained = async (target, scopes, needed) => {
-  const result = await containedPath(target, scopes, needed);
+const assertContained = async (target, scopes, needed, host) => {
+  const result = await containedPath(target, scopes, needed, host);
   if (!result.allowed) {
     // Say WHY, using the same wording as the cloud policy engine.
     throw Object.assign(Error(result.detail || describeScopeRefusal(result.reason, target)), {reason: result.reason});
@@ -89,7 +117,7 @@ const nodeModulesBin = cwd => join(cwd, 'node_modules');
  * real JavaScript entry point. If the entry point cannot be found we FAIL
  * CLOSED instead of falling back to a shell.
  */
-export function resolveCommand(executable, cwd) {
+export function resolveCommand(executable, cwd, host = nativeHost) {
   if (executable === 'node') return {command: process.execPath, args: []};
   if (executable === 'git') return {command: process.platform === 'win32' ? 'git.exe' : 'git', args: []};
   if (executable === 'npm') {
@@ -103,12 +131,13 @@ export function resolveCommand(executable, cwd) {
     return {command: process.execPath, args: [found]};
   }
   if (executable === 'tsc') {
-    const entry = join(nodeModulesBin(cwd), 'typescript', 'bin', 'tsc');
+    // `cwd` is canonical-form; the entry point itself is a host path.
+    const entry = join(nodeModulesBin(host.toHostPath(cwd)), 'typescript', 'bin', 'tsc');
     if (!existsSync(entry)) throw Error('TypeScript is not installed in this project');
     return {command: process.execPath, args: [entry]};
   }
   if (executable === 'eslint') {
-    const entry = join(nodeModulesBin(cwd), 'eslint', 'bin', 'eslint.js');
+    const entry = join(nodeModulesBin(host.toHostPath(cwd)), 'eslint', 'bin', 'eslint.js');
     if (!existsSync(entry)) throw Error('ESLint is not installed in this project');
     return {command: process.execPath, args: [entry]};
   }
@@ -147,45 +176,46 @@ function runProcess(command, args, {cwd, timeoutMs}) {
 // --------------------------------------------------------------------------
 // Capability handlers
 // --------------------------------------------------------------------------
-async function statObservation(real) {
+async function statObservation(real, host) {
   try {
-    const info = await fs.stat(real);
+    const info = await fs.stat(host.toHostPath(real));
     return {exists: true, type: info.isDirectory() ? 'dir' : 'file', size: info.size, modifiedAt: info.mtimeMs};
   } catch {
     return {exists: false};
   }
 }
 
-async function listDirectory(real, depth) {
+async function listDirectory(real, depth, host) {
   const entries = [];
   const walk = async (dir, level, prefix) => {
     if (entries.length >= MAX_LIST_ENTRIES) return;
-    const children = await fs.readdir(dir, {withFileTypes: true});
+    const children = await fs.readdir(host.toHostPath(dir), {withFileTypes: true});
     for (const child of children) {
       if (entries.length >= MAX_LIST_ENTRIES) return;
       const relative = prefix ? `${prefix}/${child.name}` : child.name;
       entries.push({name: relative, type: child.isDirectory() ? 'dir' : 'file'});
-      if (child.isDirectory() && level < depth) await walk(join(dir, child.name), level + 1, relative);
+      if (child.isDirectory() && level < depth) await walk(winJoin(dir, child.name), level + 1, relative);
     }
   };
   await walk(real, 1, '');
   return entries;
 }
 
-async function searchDirectory(real, query, maxResults) {
+async function searchDirectory(real, query, maxResults, host) {
   const needle = query.toLowerCase();
   const matches = [];
   const walk = async dir => {
     if (matches.length >= maxResults) return;
-    for (const child of await fs.readdir(dir, {withFileTypes: true})) {
+    for (const child of await fs.readdir(host.toHostPath(dir), {withFileTypes: true})) {
       if (matches.length >= maxResults) return;
-      const full = join(dir, child.name);
+      const full = winJoin(dir, child.name);
       if (child.isDirectory()) { await walk(full); continue; }
       if (!child.isFile()) continue;
       try {
-        const info = await fs.stat(full);
+        const hostPath = host.toHostPath(full);
+        const info = await fs.stat(hostPath);
         if (info.size > MAX_READ_BYTES) continue;
-        const content = await fs.readFile(full, 'utf8');
+        const content = await fs.readFile(hostPath, 'utf8');
         const index = content.toLowerCase().indexOf(needle);
         if (index >= 0) matches.push({path: full, excerpt: content.slice(Math.max(0, index - 80), index + 160)});
       } catch { /* unreadable file: skip rather than fail the search */ }
@@ -199,9 +229,12 @@ async function searchDirectory(real, query, maxResults) {
  * Execute one capability. Throws on refusal; returns {observation, result}.
  * `scopes` and `approvedCommands` come from the device policy.
  */
-export async function executeAction({capability, args, scopes, approvedCommands = [], roots = []}) {
+export async function executeAction({capability, args, scopes, approvedCommands = [], roots = [], host = nativeHost}) {
   const spec = DESKTOP_CAPABILITIES[capability];
   if (!spec) throw Error(`Unknown capability: ${capability}`);
+  if (!host || typeof host.toHostPath !== 'function' || typeof host.fromHostPath !== 'function') {
+    throw Error('An invalid host bridge was supplied');
+  }
   const normalised = validateDesktopArgs(capability, args);
 
   switch (capability) {
@@ -213,6 +246,7 @@ export async function executeAction({capability, args, scopes, approvedCommands 
           arch: process.arch,
           node: process.version,
           cwd: process.cwd(),
+          hostBridge: host.name || 'native',
           authorisedFolders: scopes,
           approvedCommands,
           note: 'Read-only local environment report. No file contents are included.'
@@ -221,84 +255,88 @@ export async function executeAction({capability, args, scopes, approvedCommands 
     }
 
     case 'fs.list': {
-      const real = await assertContained(normalised.path, scopes, 'read');
-      const entries = await listDirectory(real, normalised.depth);
+      const real = await assertContained(normalised.path, scopes, 'read', host);
+      const entries = await listDirectory(real, normalised.depth, host);
       return {observation: {exists: true}, result: {path: normalised.path, entries, truncated: entries.length >= MAX_LIST_ENTRIES}};
     }
 
     case 'fs.stat': {
-      const real = await assertContained(normalised.path, scopes, 'read');
-      return {observation: await statObservation(real), result: {path: normalised.path}};
+      const real = await assertContained(normalised.path, scopes, 'read', host);
+      return {observation: await statObservation(real, host), result: {path: normalised.path}};
     }
 
     case 'fs.read': {
-      const real = await assertContained(normalised.path, scopes, 'read');
-      const info = await fs.stat(real);
+      const real = await assertContained(normalised.path, scopes, 'read', host);
+      const hostPath = host.toHostPath(real);
+      const info = await fs.stat(hostPath);
       if (info.isDirectory()) throw Error('That is a folder, not a file');
       if (info.size > MAX_READ_BYTES) throw Error(`That file is larger than ${Math.round(MAX_READ_BYTES / 1000)} KB`);
-      const buffer = await fs.readFile(real);
+      const buffer = await fs.readFile(hostPath);
       if (buffer.includes(0)) throw Error('That looks like a binary file');
       const content = text(buffer);
       return {observation: {exists: true, content}, result: {path: normalised.path, content, bytes: info.size}};
     }
 
     case 'fs.search': {
-      const real = await assertContained(normalised.path, scopes, 'read');
-      const matches = await searchDirectory(real, normalised.query, normalised.maxResults);
+      const real = await assertContained(normalised.path, scopes, 'read', host);
+      const matches = await searchDirectory(real, normalised.query, normalised.maxResults, host);
       return {observation: {exists: true}, result: {path: normalised.path, query: normalised.query, matches}};
     }
 
     case 'fs.write': {
-      const real = await assertContained(normalised.path, scopes, 'write');
-      const parent = dirname(real);
-      if (normalised.createFolders) await fs.mkdir(parent, {recursive: true});
-      await fs.writeFile(real, normalised.content, 'utf8');
-      const info = await fs.stat(real);
+      const real = await assertContained(normalised.path, scopes, 'write', host);
+      const hostPath = host.toHostPath(real);
+      if (normalised.createFolders) await fs.mkdir(dirname(hostPath), {recursive: true});
+      await fs.writeFile(hostPath, normalised.content, 'utf8');
+      const info = await fs.stat(hostPath);
       return {observation: {exists: true, size: info.size}, result: {path: normalised.path, bytes: info.size}};
     }
 
     case 'fs.mkdir': {
-      const real = await assertContained(normalised.path, scopes, 'write');
-      await fs.mkdir(real, {recursive: true});
+      const real = await assertContained(normalised.path, scopes, 'write', host);
+      await fs.mkdir(host.toHostPath(real), {recursive: true});
       return {observation: {exists: true}, result: {path: normalised.path}};
     }
 
     case 'fs.copy': {
-      const from = await assertContained(normalised.from, scopes, 'read');
-      const to = await assertContained(normalised.to, scopes, 'write');
-      if (!normalised.overwrite && existsSync(to)) throw Error('The destination already exists');
-      await fs.cp(from, to, {recursive: true, force: normalised.overwrite, errorOnExist: !normalised.overwrite});
+      const from = await assertContained(normalised.from, scopes, 'read', host);
+      const to = await assertContained(normalised.to, scopes, 'write', host);
+      const hostTo = host.toHostPath(to);
+      if (!normalised.overwrite && existsSync(hostTo)) throw Error('The destination already exists');
+      await fs.cp(host.toHostPath(from), hostTo, {recursive: true, force: normalised.overwrite, errorOnExist: !normalised.overwrite});
       return {observation: {exists: true}, result: {from: normalised.from, to: normalised.to}};
     }
 
     case 'fs.move': {
-      const from = await assertContained(normalised.from, scopes, 'write');
-      const to = await assertContained(normalised.to, scopes, 'write');
-      if (!normalised.overwrite && existsSync(to)) throw Error('The destination already exists');
+      const from = await assertContained(normalised.from, scopes, 'write', host);
+      const to = await assertContained(normalised.to, scopes, 'write', host);
+      const hostFrom = host.toHostPath(from), hostTo = host.toHostPath(to);
+      if (!normalised.overwrite && existsSync(hostTo)) throw Error('The destination already exists');
       try {
-        await fs.rename(from, to);
+        await fs.rename(hostFrom, hostTo);
       } catch (error) {
         if (error.code !== 'EXDEV') throw error;
-        await fs.cp(from, to, {recursive: true});
-        await fs.rm(from, {recursive: true, force: true});
+        await fs.cp(hostFrom, hostTo, {recursive: true});
+        await fs.rm(hostFrom, {recursive: true, force: true});
       }
-      const observation = {...await statObservation(to), fromExists: existsSync(from)};
+      const observation = {...await statObservation(to, host), fromExists: existsSync(hostFrom)};
       return {observation, result: {from: normalised.from, to: normalised.to}};
     }
 
     case 'fs.delete': {
-      const real = await assertContained(normalised.path, scopes, 'write');
-      const info = await fs.stat(real);
-      await fs.rm(real, {recursive: info.isDirectory(), force: false});
+      const real = await assertContained(normalised.path, scopes, 'write', host);
+      const hostPath = host.toHostPath(real);
+      const info = await fs.stat(hostPath);
+      await fs.rm(hostPath, {recursive: info.isDirectory(), force: false});
       return {observation: {exists: false}, result: {path: normalised.path, removed: info.isDirectory() ? 'folder' : 'file'}};
     }
 
     case 'dev.run': {
       const access = checkCommandAccess(approvedCommands, normalised.executable, normalised.args);
       if (!access.allowed) throw Object.assign(Error(access.detail || `"${normalised.executable}" is not approved`), {reason: access.reason});
-      const cwd = normalised.cwd ? await assertContained(normalised.cwd, scopes, 'write') : (scopes[0]?.path ?? process.cwd());
-      const {command, args: prefix} = resolveCommand(access.executable, cwd);
-      const run = await runProcess(command, [...prefix, ...access.args], {cwd, timeoutMs: normalised.timeoutMs});
+      const cwd = normalised.cwd ? await assertContained(normalised.cwd, scopes, 'write', host) : (scopes[0]?.path ?? process.cwd());
+      const {command, args: prefix} = resolveCommand(access.executable, cwd, host);
+      const run = await runProcess(command, [...prefix, ...access.args], {cwd: host.toHostPath(cwd), timeoutMs: normalised.timeoutMs});
       return {
         observation: {exitCode: run.exitCode},
         result: {

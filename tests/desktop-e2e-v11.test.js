@@ -13,6 +13,7 @@
 import test,{mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {createFakeStore} from './helpers/fake-store.js';
+import {createDeviceHost} from './helpers/device-host.js';
 import {promises as fs} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
@@ -399,44 +400,45 @@ test('two computers stay isolated: an action queued for one is never claimed by 
 // --------------------------------------------------------------------------
 // P4/P5 — executor behaviour on a real filesystem
 // --------------------------------------------------------------------------
+// createDeviceHost() gives the native end-to-end path on Windows and the
+// POSIX bridge elsewhere; the containment pipeline is identical on both.
 test('the executor performs and verifies a real write, then a real delete',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-e2e-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const scopes=[{path:root,mode:'write'}];
- const file=join(root,'note.txt');
- const write=await EX.executeAction({scopes,approvedCommands:[],capability:'fs.write',args:{path:file,content:'hello'}});
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ const base={scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:[],host:pc.host};
+ const file=pc.winPath('note.txt');
+ const write=await EX.executeAction({...base,capability:'fs.write',args:{path:file,content:'hello'}});
  assert.equal(D.verifyObservation(D.expectationFor('fs.write',{path:file}),write.observation).status,'verified');
- assert.equal((await EX.executeAction({scopes,approvedCommands:[],capability:'fs.read',args:{path:file}})).result.content,'hello');
- const del=await EX.executeAction({scopes,approvedCommands:[],capability:'fs.delete',args:{path:file}});
+ assert.equal((await EX.executeAction({...base,capability:'fs.read',args:{path:file}})).result.content,'hello');
+ const del=await EX.executeAction({...base,capability:'fs.delete',args:{path:file}});
  assert.equal(D.verifyObservation(D.expectationFor('fs.delete',{path:file}),del.observation).status,'verified');
 });
 
 test('the executor refuses a path outside the authorised folder without touching disk',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-e2e-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const outside=join(tmpdir(),'samvit-should-not-exist.txt');
- await assert.rejects(EX.executeAction({scopes:[{path:root,mode:'write'}],approvedCommands:[],capability:'fs.write',args:{path:outside,content:'x'}}),/authorised|Refused/);
- assert.equal(await fs.stat(outside).then(()=>true).catch(()=>false),false);
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ const escape=pc.outsidePath('should-not-exist.txt');
+ await assert.rejects(EX.executeAction({scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:[],host:pc.host,capability:'fs.write',args:{path:escape,content:'x'}}),/authorised|Refused/);
+ assert.equal(await fs.stat(pc.hostPath(escape)).then(()=>true).catch(()=>false),false);
 });
 
 test('a junction inside an authorised folder cannot be used to escape it',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-e2e-'));
- const outside=await fs.mkdtemp(join(tmpdir(),'samvit-out-'));
- t.after(()=>Promise.all([fs.rm(root,{recursive:true,force:true}),fs.rm(outside,{recursive:true,force:true})]));
- await fs.writeFile(join(outside,'secret.txt'),'secret');
- try { await fs.symlink(outside,join(root,'link'),'junction'); }
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ await fs.writeFile(pc.hostPath(pc.outsidePath('secret.txt')),'secret');
+ try { await fs.symlink(pc.hostPath(pc.outsideRoot),pc.hostPath(pc.winPath('link')),'junction'); }
  catch { t.skip('this platform does not permit creating junctions without elevation'); return; }
- await assert.rejects(EX.executeAction({scopes:[{path:root,mode:'read'}],approvedCommands:[],capability:'fs.read',args:{path:join(root,'link','secret.txt')}}),/outside the authorised folders/);
+ await assert.rejects(EX.executeAction({scopes:[{path:pc.scopePath,mode:'read'}],approvedCommands:[],host:pc.host,capability:'fs.read',args:{path:pc.winPath('link','secret.txt')}}),/outside the authorised folders/);
 });
 
 test('only approved commands run, and never through a shell',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-e2e-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const base={scopes:[{path:root,mode:'write'}]};
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ const base={scopes:[{path:pc.scopePath,mode:'write'}],host:pc.host};
  await assert.rejects(EX.executeAction({...base,approvedCommands:[],capability:'dev.run',args:{executable:'node',args:['--version']}}),/not approved/);
  await assert.rejects(EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'powershell',args:['-c','Get-Process']}}),/not an approved executable/);
  await assert.rejects(EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'node',args:['-e','process.exit(0)']}}),/may not be used with -e/);
- const run=await EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'node',args:['--version'],cwd:root}});
+ const run=await EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'node',args:['--version'],cwd:pc.scopePath}});
  assert.equal(run.observation.exitCode,0);
  assert.match(run.result.stdout,/^v\d+/);
 });

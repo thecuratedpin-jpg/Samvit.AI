@@ -11,7 +11,7 @@ import {candidates} from './model-routing.js';
 import {chargeToolBudget} from './tool-budget.js';
 import {readSafety} from './permissions.js';
 import {appendTrace} from './trace.js';
-import {recordExperience} from './world-state.js';
+import {recordExperience,worldState} from './world-state.js';
 import {snapshot as snapshotEnvironment} from './vfs.js';
 import {verifyEnvironment,mergeEnvironmentVerifications} from './environment.js';
 export async function runJob(accountId,id,env,{modelCall=callModel,agent=runAgent,now=()=>Date.now()}={}){

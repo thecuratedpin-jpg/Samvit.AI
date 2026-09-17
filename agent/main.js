@@ -27,8 +27,11 @@ import {createReceiptStore, shouldRecord} from './receipts.js';
  *
  * `receipts` makes redelivery safe: an action that already completed is
  * replayed from its receipt instead of being performed a second time.
+ *
+ * `host` is the executor's path bridge (see executor.js). Production leaves
+ * it undefined — the native bridge — so behaviour on a real PC is unchanged.
  */
-export async function runOnce(transport, {log = () => {}, execute = executeAction, receipts = null} = {}) {
+export async function runOnce(transport, {log = () => {}, execute = executeAction, receipts = null, host = undefined} = {}) {
   const {actions = [], halted} = await transport.poll();
   if (halted) {
     log('Samvit has engaged the emergency stop; not taking new work.');
@@ -50,7 +53,8 @@ export async function runOnce(transport, {log = () => {}, execute = executeActio
         capability: action.capability,
         args: action.args,
         scopes: policy.scopes || [],
-        approvedCommands: policy.approvedCommands || []
+        approvedCommands: policy.approvedCommands || [],
+        ...(host ? {host} : {})
       });
       await transport.complete(action.id, {observation, report: result});
       if (receipts && shouldRecord(action.capability)) {

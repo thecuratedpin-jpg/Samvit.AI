@@ -8,9 +8,8 @@
 import test,{mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {createFakeStore,createFailingStore} from './helpers/fake-store.js';
+import {createDeviceHost} from './helpers/device-host.js';
 import {promises as fs} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
 const stores=new Map(),store=n=>{if(!stores.has(n))stores.set(n,createFakeStore());return stores.get(n);};
 mock.module('@netlify/blobs',{namedExports:{getStore:store}});
 const D=await import('../shared/desktop.js');
@@ -288,90 +287,92 @@ test('declining an action marks it denied and never dispatches it',async()=>{
 // --------------------------------------------------------------------------
 // Phase 1/3 — the executor against a real filesystem
 // --------------------------------------------------------------------------
+// PLATFORM NOTE: these use createDeviceHost() — the NATIVE path end-to-end
+// on Windows, and the POSIX bridge elsewhere, with the full containment
+// pipeline (canonicalise → scope → realpath → re-check) exercised on both.
 test('the executor performs real file operations inside an authorised folder',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-scope-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const scopes=[{path:root,mode:'write'}];
- const ctx={scopes,approvedCommands:[]};
- const file=join(root,'note.txt');
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ const ctx={scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:[],host:pc.host};
+ const file=pc.winPath('note.txt');
 
  const write=await EX.executeAction({...ctx,capability:'fs.write',args:{path:file,content:'hello'}});
  assert.equal(write.observation.exists,true);
  const read=await EX.executeAction({...ctx,capability:'fs.read',args:{path:file}});
  assert.equal(read.result.content,'hello');
- const list=await EX.executeAction({...ctx,capability:'fs.list',args:{path:root}});
+ const list=await EX.executeAction({...ctx,capability:'fs.list',args:{path:pc.scopePath}});
  assert.deepEqual(list.result.entries.map(e=>e.name),['note.txt']);
- await EX.executeAction({...ctx,capability:'fs.mkdir',args:{path:join(root,'sub')}});
- const copy=await EX.executeAction({...ctx,capability:'fs.copy',args:{from:file,to:join(root,'sub','copy.txt')}});
+ await EX.executeAction({...ctx,capability:'fs.mkdir',args:{path:pc.winPath('sub')}});
+ const copy=await EX.executeAction({...ctx,capability:'fs.copy',args:{from:file,to:pc.winPath('sub','copy.txt')}});
  assert.equal(copy.observation.exists,true);
- const move=await EX.executeAction({...ctx,capability:'fs.move',args:{from:join(root,'sub','copy.txt'),to:join(root,'moved.txt')}});
+ const move=await EX.executeAction({...ctx,capability:'fs.move',args:{from:pc.winPath('sub','copy.txt'),to:pc.winPath('moved.txt')}});
  assert.equal(move.observation.exists,true);assert.equal(move.observation.fromExists,false);
- const search=await EX.executeAction({...ctx,capability:'fs.search',args:{path:root,query:'hello'}});
+ const search=await EX.executeAction({...ctx,capability:'fs.search',args:{path:pc.scopePath,query:'hello'}});
  assert.equal(search.result.matches.length,2,'note.txt and the moved copy both contain the term');
- const del=await EX.executeAction({...ctx,capability:'fs.delete',args:{path:join(root,'moved.txt')}});
+ const del=await EX.executeAction({...ctx,capability:'fs.delete',args:{path:pc.winPath('moved.txt')}});
  assert.equal(del.observation.exists,false);
- assert.equal(await fs.stat(join(root,'moved.txt')).then(()=>true).catch(()=>false),false);
+ assert.equal(await fs.stat(pc.hostPath(pc.winPath('moved.txt'))).then(()=>true).catch(()=>false),false);
 });
 
 test('the executor refuses anything outside the authorised folder, touching nothing',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-scope-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const ctx={scopes:[{path:root,mode:'write'}],approvedCommands:[]};
- const outside=join(tmpdir(),'samvit-escape-attempt.txt');
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ const ctx={scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:[],host:pc.host};
+ const escape=pc.outsidePath('escape-attempt.txt');
  for(const args of [
-  {path:outside},
-  {path:join(root,'..','..','Windows','win.ini')},
+  {path:escape},
+  {path:`${pc.scopePath}\\..\\..\\Windows\\win.ini`},
   {path:'C:\\Windows\\System32\\drivers\\etc\\hosts'},
-  {path:join(root,'..','sibling.txt')}
+  {path:`${pc.scopePath}\\..\\sibling.txt`}
  ]) await assert.rejects(EX.executeAction({...ctx,capability:'fs.write',args:{...args,content:'x'}}),/authorised|traversal|Refused/);
- assert.equal(await fs.stat(outside).then(()=>true).catch(()=>false),false,'nothing was written outside the scope');
+ assert.equal(await fs.stat(pc.hostPath(escape)).then(()=>true).catch(()=>false),false,'nothing was written outside the scope');
  // A read-only scope refuses writes but allows reads.
- await EX.executeAction({...ctx,capability:'fs.write',args:{path:join(root,'ok.txt'),content:'ok'}});
- const readOnly={scopes:[{path:root,mode:'read'}],approvedCommands:[]};
- assert.equal((await EX.executeAction({...readOnly,capability:'fs.read',args:{path:join(root,'ok.txt')}})).result.content,'ok');
- await assert.rejects(EX.executeAction({...readOnly,capability:'fs.write',args:{path:join(root,'no.txt'),content:'x'}}),/reading only|Refused/);
+ await EX.executeAction({...ctx,capability:'fs.write',args:{path:pc.winPath('ok.txt'),content:'ok'}});
+ const readOnly={scopes:[{path:pc.scopePath,mode:'read'}],approvedCommands:[],host:pc.host};
+ assert.equal((await EX.executeAction({...readOnly,capability:'fs.read',args:{path:pc.winPath('ok.txt')}})).result.content,'ok');
+ await assert.rejects(EX.executeAction({...readOnly,capability:'fs.write',args:{path:pc.winPath('no.txt'),content:'x'}}),/reading only|Refused/);
 });
 
 test('a symlink or junction inside an authorised folder cannot be used to escape it',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-scope-'));
- const outside=await fs.mkdtemp(join(tmpdir(),'samvit-outside-'));
- t.after(()=>Promise.all([fs.rm(root,{recursive:true,force:true}),fs.rm(outside,{recursive:true,force:true})]));
- await fs.writeFile(join(outside,'secret.txt'),'secret');
- const link=join(root,'link');
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ await fs.writeFile(pc.hostPath(pc.outsidePath('secret.txt')),'secret');
+ const link=pc.winPath('link');
  try {
-  await fs.symlink(outside,link,'junction');
+  await fs.symlink(pc.hostPath(pc.outsideRoot),pc.hostPath(link),'junction');
  } catch {
   t.skip('this environment does not permit creating junctions');
   return;
  }
  // The literal path is inside the scope, but it RESOLVES outside it.
  await assert.rejects(
-  EX.executeAction({scopes:[{path:root,mode:'read'}],approvedCommands:[],capability:'fs.read',args:{path:join(link,'secret.txt')}}),
+  EX.executeAction({scopes:[{path:pc.scopePath,mode:'read'}],approvedCommands:[],host:pc.host,capability:'fs.read',args:{path:pc.winPath('link','secret.txt')}}),
   /outside the authorised folders/
  );
 });
 
 test('the executor runs only approved commands and never through a shell',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-scope-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const base={scopes:[{path:root,mode:'write'}]};
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ const base={scopes:[{path:pc.scopePath,mode:'write'}],host:pc.host};
  await assert.rejects(EX.executeAction({...base,approvedCommands:[],capability:'dev.run',args:{executable:'node',args:['--version']}}),/not approved/);
  await assert.rejects(EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'powershell',args:['-c','x']}}),/approved|permitted/);
  await assert.rejects(EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'node',args:['-e','console.log(1)']}}),/may not be used with -e/);
- const run=await EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'node',args:['--version'],cwd:root}});
+ const run=await EX.executeAction({...base,approvedCommands:['node --version'],capability:'dev.run',args:{executable:'node',args:['--version'],cwd:pc.scopePath}});
  assert.equal(run.observation.exitCode,0);
  assert.match(run.result.stdout,/^v\d+/);
  assert.equal(run.result.command,'node --version');
 });
 
 test('the executor refuses an unknown capability and malformed arguments',async t=>{
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-scope-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
- const ctx={scopes:[{path:root,mode:'write'}],approvedCommands:[]};
- await assert.rejects(EX.executeAction({...ctx,capability:'fs.chmod',args:{path:join(root,'a')}}),/Unknown capability/);
- await assert.rejects(EX.executeAction({...ctx,capability:'fs.write',args:{path:join(root,'a')}}),/content is required/);
+ const pc=await createDeviceHost();
+ t.after(pc.cleanup);
+ const ctx={scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:[],host:pc.host};
+ await assert.rejects(EX.executeAction({...ctx,capability:'fs.chmod',args:{path:pc.winPath('a')}}),/Unknown capability/);
+ await assert.rejects(EX.executeAction({...ctx,capability:'fs.write',args:{path:pc.winPath('a')}}),/content is required/);
  await assert.rejects(EX.executeAction({...ctx,capability:'fs.read',args:{}}),/path is required/);
  await assert.rejects(EX.executeAction({...ctx,capability:'dev.run',args:{executable:'npm',args:[]}}),/not approved/);
+ await assert.rejects(EX.executeAction({...ctx,host:{toHostPath:'not-a-function'},capability:'fs.read',args:{path:pc.winPath('a')}}),/invalid host bridge/);
 });
 
 // --------------------------------------------------------------------------

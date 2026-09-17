@@ -16,9 +16,9 @@ import test,{mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {promises as fs} from 'node:fs';
-import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createFakeStore} from './helpers/fake-store.js';
+import {createDeviceHost} from './helpers/device-host.js';
 const stores=new Map(),store=n=>{if(!stores.has(n))stores.set(n,createFakeStore());return stores.get(n);};
 mock.module('@netlify/blobs',{namedExports:{getStore:store}});
 
@@ -63,8 +63,8 @@ const seedAccount = async () => {
 
 test('LIVE: a mission action travels cloud → agent → real filesystem → verified observation',async t=>{
  await seedAccount();
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-live-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const pc=await createDeviceHost({prefix:'samvit-live-'});
+ t.after(pc.cleanup);
  const server=await startServer();
  t.after(()=>new Promise(resolve=>server.close(resolve)));
  const cloudUrl=`http://127.0.0.1:${server.address().port}`;
@@ -77,10 +77,10 @@ test('LIVE: a mission action travels cloud → agent → real filesystem → ver
  assert.ok(pairing.deviceToken.length>=32);
 
  // 2. The user authorises exactly one folder.
- await R.setDevicePolicy(A,pairing.deviceId,{scopes:[{path:root,mode:'write'}],approvedCommands:[]});
+ await R.setDevicePolicy(A,pairing.deviceId,{scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:[]});
 
  // 3. The cloud queues one structured action.
- const target=join(root,'live.txt');
+ const target=pc.winPath('live.txt');
  const queued=await Q.enqueueAction(A,{
   deviceId:pairing.deviceId,
   capability:'fs.write',
@@ -91,13 +91,13 @@ test('LIVE: a mission action travels cloud → agent → real filesystem → ver
 
  // 4. The REAL agent polls over HTTP, executes with the REAL executor, reports.
  const transport=createTransport({cloudUrl,deviceId:pairing.deviceId,deviceToken:pairing.deviceToken});
- const receipts=createReceiptStore(join(root,'receipts.json'));
- const summary=await runOnce(transport,{execute:EX.executeAction,receipts});
+ const receipts=createReceiptStore(join(pc.receiptsDir,'receipts.json'));
+ const summary=await runOnce(transport,{execute:EX.executeAction,receipts,host:pc.host});
  assert.equal(summary.executed,1,`agent should have executed the action: ${JSON.stringify(summary)}`);
  assert.equal(summary.refused,0);
 
  // 5. The file genuinely exists on disk with the expected content.
- assert.equal(await fs.readFile(target,'utf8'),'written by the real agent');
+ assert.equal(await fs.readFile(pc.hostPath(target),'utf8'),'written by the real agent');
 
  // 6. The cloud verified the observation against the promised effect.
  const record=await Q.readAction(A,queued.id);
@@ -108,13 +108,20 @@ test('LIVE: a mission action travels cloud → agent → real filesystem → ver
 
  // 7. The agent recorded a durable receipt for the state-changing action.
  assert.ok(receipts.get(queued.id));
+
+ // 8. Redelivery (crash-before-report) replays the receipt instead of
+ //    writing the file a second time.
+ const replay=await runOnce(transport,{execute:EX.executeAction,receipts,host:pc.host});
+ // Nothing new was polled this time, so nothing replays — the receipt is
+ // only consulted when the same action id is delivered again.
+ assert.equal(replay.executed,0);
+ assert.equal(replay.replayed,0);
 });
 
 test('LIVE: the agent refuses an out-of-scope path over the real wire and writes nothing',async t=>{
  await seedAccount();
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-live2-'));
- const escape=join(tmpdir(),'samvit-live-escape.txt');
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const pc=await createDeviceHost({prefix:'samvit-live2-'});
+ t.after(pc.cleanup);
  const server=await startServer();
  t.after(()=>new Promise(resolve=>server.close(resolve)));
  const cloudUrl=`http://127.0.0.1:${server.address().port}`;
@@ -122,11 +129,12 @@ test('LIVE: the agent refuses an out-of-scope path over the real wire and writes
  const {code}=await R.beginPairing(A);
  const pairing=await createTransport({cloudUrl,deviceId:null,deviceToken:null})
   .pair({code,deviceName:'Scoped PC',platform:process.platform,arch:process.arch});
- await R.setDevicePolicy(A,pairing.deviceId,{scopes:[{path:root,mode:'write'}],approvedCommands:[]});
+ await R.setDevicePolicy(A,pairing.deviceId,{scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:[]});
 
  // The queue is asked for something outside the authorised folder. The cloud
  // policy would normally stop this first; the agent must ALSO refuse, because
  // a compromised or buggy cloud must not be able to widen what a PC will do.
+ const escape=pc.outsidePath('live-escape.txt');
  const queued=await Q.enqueueAction(A,{
   deviceId:pairing.deviceId,
   capability:'fs.write',
@@ -135,9 +143,9 @@ test('LIVE: the agent refuses an out-of-scope path over the real wire and writes
  });
 
  const transport=createTransport({cloudUrl,deviceId:pairing.deviceId,deviceToken:pairing.deviceToken});
- const summary=await runOnce(transport,{execute:EX.executeAction,receipts:null});
+ const summary=await runOnce(transport,{execute:EX.executeAction,receipts:null,host:pc.host});
  assert.equal(summary.refused,1,'the agent must refuse it locally');
- assert.equal(await fs.stat(escape).then(()=>true).catch(()=>false),false,'nothing may be written outside the scope');
+ assert.equal(await fs.stat(pc.hostPath(escape)).then(()=>true).catch(()=>false),false,'nothing may be written outside the scope');
  const record=await Q.readAction(A,queued.id);
  assert.equal(record.status,'failed');
  assert.match(record.error,/authorised folders/);
@@ -146,8 +154,8 @@ test('LIVE: the agent refuses an out-of-scope path over the real wire and writes
 
 test('LIVE: an unapproved command never runs, and an approved one reports its real exit code',async t=>{
  await seedAccount();
- const root=await fs.mkdtemp(join(tmpdir(),'samvit-live3-'));
- t.after(()=>fs.rm(root,{recursive:true,force:true}));
+ const pc=await createDeviceHost({prefix:'samvit-live3-'});
+ t.after(pc.cleanup);
  const server=await startServer();
  t.after(()=>new Promise(resolve=>server.close(resolve)));
  const cloudUrl=`http://127.0.0.1:${server.address().port}`;
@@ -155,13 +163,13 @@ test('LIVE: an unapproved command never runs, and an approved one reports its re
  const {code}=await R.beginPairing(A);
  const pairing=await createTransport({cloudUrl,deviceId:null,deviceToken:null})
   .pair({code,deviceName:'Runner PC',platform:process.platform,arch:process.arch});
- await R.setDevicePolicy(A,pairing.deviceId,{scopes:[{path:root,mode:'write'}],approvedCommands:['node --version']});
+ await R.setDevicePolicy(A,pairing.deviceId,{scopes:[{path:pc.scopePath,mode:'write'}],approvedCommands:['node --version']});
  const transport=createTransport({cloudUrl,deviceId:pairing.deviceId,deviceToken:pairing.deviceToken});
 
  const denied=await Q.enqueueAction(A,{deviceId:pairing.deviceId,capability:'dev.run',args:{executable:'npm',args:['run','build']},expected:{kind:'exit',code:0}});
- const allowed=await Q.enqueueAction(A,{deviceId:pairing.deviceId,capability:'dev.run',args:{executable:'node',args:['--version'],cwd:root},expected:{kind:'exit',code:0}});
+ const allowed=await Q.enqueueAction(A,{deviceId:pairing.deviceId,capability:'dev.run',args:{executable:'node',args:['--version'],cwd:pc.scopePath},expected:{kind:'exit',code:0}});
 
- const summary=await runOnce(transport,{execute:EX.executeAction,receipts:null});
+ const summary=await runOnce(transport,{execute:EX.executeAction,receipts:null,host:pc.host});
  assert.equal(summary.refused,1);assert.equal(summary.executed,1);
 
  const refused=await Q.readAction(A,denied.id);
