@@ -53,6 +53,18 @@ export async function renderComputers({main, api, esc, notify}) {
     <button class="secondary" data-add-command="${esc(device.id)}">Approve command</button></div>
     <p class="intro">Only these executables can ever run: node, npm, git, tsc, eslint. Shells, <code>npx</code>, <code>npm install</code> and inline evaluation are refused outright and cannot be approved.</p></details>`;
 
+  const originEditor = (device) => {
+    const lists = device.browserOrigins || {};
+    const row = (origin, index, list) => `<p><code>${esc(origin)}</code> · ${list === 'allow' ? 'allowed' : 'blocked'} <button class="secondary" data-move-origin="${index}" data-list="${list}" data-device="${esc(device.id)}">${list === 'allow' ? 'Block' : 'Allow'}</button> <button class="secondary" data-remove-origin="${index}" data-list="${list}" data-device="${esc(device.id)}">Remove</button></p>`;
+    const rows = [...(lists.allow || []).map((origin, i) => row(origin, i, 'allow')), ...(lists.deny || []).map((origin, i) => row(origin, i, 'deny'))].join('');
+    return `<details><summary>Browser site permissions (${(lists.allow || []).length + (lists.deny || []).length})</summary>
+    ${rows || '<p>No site decisions yet. When Samvit needs to open or fetch a page, it asks once per site and remembers your choice here.</p>'}
+    <div class="form-row"><input class="search" data-origin-url="${esc(device.id)}" placeholder="https://example.com" aria-label="Site origin">
+    <button class="secondary" data-allow-origin="${esc(device.id)}">Always allow</button>
+    <button class="secondary" data-block-origin="${esc(device.id)}">Always block</button></div>
+    <p class="intro">Samvit treats every page as untrusted data. A site permission lets its agent <em>reach</em> the site — it never grants permission to act <em>on</em> your computer based on what a page says.</p></details>`;
+  };
+
   async function refresh() {
     try {
       const data = await api('/api/devices');
@@ -70,7 +82,7 @@ export async function renderComputers({main, api, esc, notify}) {
       $('#device-list').innerHTML = devices.length ? devices.map(device => `<article class="record">
         <h3>${esc(device.name)} ${presence(device)}</h3>
         <p>${esc(device.platform)} · ${esc(device.arch)} · ${device.lastSeenAt ? `last seen ${esc(new Date(device.lastSeenAt).toLocaleString())}` : 'never connected'}</p>
-        ${folderEditor(device)}${commandEditor(device)}
+        ${folderEditor(device)}${commandEditor(device)}${originEditor(device)}
         <div class="record-actions"><button class="secondary" data-revoke="${esc(device.id)}">${device.revoked ? 'Already disconnected' : 'Disconnect this computer'}</button></div>
       </article>`).join('') : '<p>No computers paired yet.</p>';
 
@@ -116,8 +128,8 @@ export async function renderComputers({main, api, esc, notify}) {
       const data = await api('/api/devices');
       const device = (data.devices || []).find(entry => entry.id === deviceId);
       if (!device) throw Error('Computer not found');
-      const next = change({scopes: [...(device.scopes || [])], approvedCommands: [...(device.approvedCommands || [])]});
-      await api('/api/devices', {action: 'policy', deviceId, scopes: next.scopes, approvedCommands: next.approvedCommands});
+      const next = change({scopes: [...(device.scopes || [])], approvedCommands: [...(device.approvedCommands || [])], browserOrigins: {allow: [...(device.browserOrigins?.allow || [])], deny: [...(device.browserOrigins?.deny || [])]}});
+      await api('/api/devices', {action: 'policy', deviceId, scopes: next.scopes, approvedCommands: next.approvedCommands, browserOrigins: next.browserOrigins});
       notify(message);
       await refresh();
     } catch (error) {
@@ -146,6 +158,32 @@ export async function renderComputers({main, api, esc, notify}) {
     main.querySelectorAll('[data-remove-command]').forEach(button => button.onclick = () => {
       const index = Number(button.dataset.removeCommand);
       policy(button.dataset.device, state => ({...state, approvedCommands: state.approvedCommands.filter((_, i) => i !== index)}), 'Command removed.');
+    });
+    main.querySelectorAll('[data-allow-origin],[data-block-origin]').forEach(button => button.onclick = () => {
+      const id = button.dataset.device || button.dataset.allowOrigin || button.dataset.blockOrigin;
+      const raw = main.querySelector(`[data-origin-url="${id}"]`)?.value?.trim();
+      let origin;
+      try { origin = new URL(raw).origin; if (origin === 'null') throw 0; } catch { notify('Enter a site address like https://example.com'); return; }
+      const allow = button.dataset.allowOrigin !== undefined;
+      policy(button.dataset.device || id, state => {
+        const without = list => (list || []).filter(item => item !== origin);
+        return {...state, browserOrigins: allow ? {allow: [...without(state.browserOrigins.allow), origin], deny: without(state.browserOrigins.deny)} : {allow: without(state.browserOrigins.allow), deny: [...without(state.browserOrigins.deny), origin]}};
+      }, allow ? 'Site allowed.' : 'Site blocked.');
+    });
+    main.querySelectorAll('[data-remove-origin],[data-move-origin]').forEach(button => button.onclick = () => {
+      const index = Number(button.dataset.removeOrigin ?? button.dataset.moveOrigin);
+      const list = button.dataset.list;
+      policy(button.dataset.device, state => {
+        const current = state.browserOrigins[list] || [];
+        const origin = current[index];
+        if (!origin) return state;
+        const next = {...state.browserOrigins, [list]: current.filter((_, i) => i !== index)};
+        if (button.dataset.moveOrigin !== undefined) {
+          const other = list === 'allow' ? 'deny' : 'allow';
+          next[other] = [...(next[other] || []), origin];
+        }
+        return {...state, browserOrigins: next};
+      }, 'Site permission updated.');
     });
     main.querySelectorAll('[data-revoke]').forEach(button => button.onclick = async () => {
       if (!confirm('Disconnect this computer? It will stop being able to act until you pair it again.')) return;

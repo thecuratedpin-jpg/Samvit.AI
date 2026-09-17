@@ -18,6 +18,7 @@
 // the persisted stops and writes the audit trail.
 // ==========================================================================
 import {DESKTOP_CAPABILITIES, validateDesktopArgs, checkScopeAccess, checkCommandAccess, describeScopeRefusal} from '../../../shared/desktop.js';
+import {browserOriginPolicy} from '../../../shared/browser.js';
 import {LEVELS, levelName, readGlobalStop, recordAction} from '../intelligence/permissions.js';
 
 export const OUTCOMES = Object.freeze(['ALLOW', 'DENY', 'ASK_USER']);
@@ -95,6 +96,20 @@ export function decideLocalAction({capability, args = {}, device = null, confirm
       return {outcome: 'DENY', reason: access.reason, detail: access.detail};
     }
     normalised = {...normalised, command: access.command};
+  }
+
+  // V14 P10: browser capabilities need a per-origin decision on top of their
+  // level. Unknown origins ASK — the approval persists per site, auditable
+  // through the same action ledger as everything else.
+  if (capability === 'browser.open' || capability === 'browser.fetch') {
+    const origin = new URL(normalised.url).origin;
+    const verdict = browserOriginPolicy(device, origin);
+    if (verdict.outcome === 'deny') {
+      return {outcome: 'DENY', reason: 'origin_denied', detail: `"${origin}" is blocked for browser actions on this computer`, level, levelName: levelName(level)};
+    }
+    if (verdict.outcome === 'ask') {
+      return {outcome: 'ASK_USER', reason: 'origin_unlisted', origin, detail: `Allow Samvit to ${capability === 'browser.open' ? 'open pages in your browser from' : 'fetch pages from'} "${origin}"? Your choice is remembered per site and can be changed in device settings.`, level, levelName: levelName(level)};
+    }
   }
 
   // Sensitive and above need a confirmation the user recorded in advance.

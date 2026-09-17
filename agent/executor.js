@@ -25,6 +25,7 @@ import {
   canonicalPath, checkScopeAccess, validateDesktopArgs, checkCommandAccess,
   describeScopeRefusal, DESKTOP_CAPABILITIES
 } from '../shared/desktop.js';
+import {guardedFetch, markUntrusted, browserOpener} from '../shared/browser.js';
 
 export const MAX_READ_BYTES = 400000;
 export const MAX_LIST_ENTRIES = 500;
@@ -329,6 +330,41 @@ export async function executeAction({capability, args, scopes, approvedCommands 
       const info = await fs.stat(hostPath);
       await fs.rm(hostPath, {recursive: info.isDirectory(), force: false});
       return {observation: {exists: false}, result: {path: normalised.path, removed: info.isDirectory() ? 'folder' : 'file'}};
+    }
+
+    case 'browser.open': {
+      // Hand the URL to the OS browser launcher and leave. There is — by
+      // design — no screenshot, no DOM and no input control here; the result
+      // tells the model exactly that.
+      const opener = browserOpener(process.platform, normalised.url);
+      const run = await runProcess(opener.executable, opener.args, {cwd: process.cwd(), timeoutMs: 15000});
+      return {
+        observation: {exitCode: run.exitCode},
+        result: {
+          url: normalised.url,
+          launcher: opener.executable,
+          exitCode: run.exitCode,
+          note: 'The page was handed to the operating system\'s default browser. Samvit cannot see, read or control what opened — this is the full extent of the open capability.'
+        }
+      };
+    }
+
+    case 'browser.fetch': {
+      // SSRF-guarded, size-capped, marked UNTRUSTED. Content goes to the
+      // model as data; the policy engine never reads it at all.
+      const fetchPage = typeof host.fetchWeb === 'function' ? host.fetchWeb : guardedFetch;
+      const page = await fetchPage(normalised.url);
+      return {
+        observation: {exists: true, status: page.status},
+        result: {
+          url: page.url,
+          origin: page.origin,
+          status: page.status,
+          contentType: page.contentType,
+          truncated: page.truncated,
+          text: markUntrusted(page.text.slice(0, normalised.maxBytes), page.url)
+        }
+      };
     }
 
     case 'dev.run': {

@@ -45,7 +45,7 @@ export default async (req, context) => {
       case 'policy': {
         if (!body.deviceId) return json({error: '`deviceId` is required.'}, 400);
         const scopes = body.scopes === undefined ? undefined : normalizeScopes(body.scopes);
-        const device = await setDevicePolicy(auth.accountId, body.deviceId, {scopes, approvedCommands: body.approvedCommands});
+        const device = await setDevicePolicy(auth.accountId, body.deviceId, {scopes, approvedCommands: body.approvedCommands, browserOrigins: body.browserOrigins});
         return json({device});
       }
       case 'revoke': {

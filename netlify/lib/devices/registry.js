@@ -24,6 +24,7 @@
 // `value.accountId`).
 // ==========================================================================
 import {getStore} from '@netlify/blobs';
+import {MAX_ORIGIN_RECORDS} from '../../../shared/browser.js';
 import {casUpdate} from '../storage/concurrency.js';
 import {accountStore} from '../storage/accounts.js';
 import {timingSafeEqual} from '../security.js';
@@ -184,7 +185,7 @@ export async function listDevices(accountId) {
 }
 
 /** Update what a computer is allowed to do. Scopes are validated by the caller. */
-export async function setDevicePolicy(accountId, deviceId, {scopes, approvedCommands} = {}) {
+export async function setDevicePolicy(accountId, deviceId, {scopes, approvedCommands, browserOrigins} = {}) {
   const device = await getDevice(accountId, deviceId);
   if (!device) throw Error('Computer not found');
   if (device.revoked) throw Error('That computer has been disconnected');
@@ -192,6 +193,7 @@ export async function setDevicePolicy(accountId, deviceId, {scopes, approvedComm
     ...device,
     scopes: Array.isArray(scopes) ? scopes : device.scopes,
     approvedCommands: Array.isArray(approvedCommands) ? approvedCommands.map(String).slice(0, 50) : device.approvedCommands,
+    ...(browserOrigins !== undefined ? {browserOrigins: cleanBrowserOrigins(browserOrigins)} : {}),
     updatedAt: Date.now()
   };
   await accountStore(DEVICE_STORE, accountId).setJSON('device:' + deviceId, next);
@@ -199,6 +201,17 @@ export async function setDevicePolicy(accountId, deviceId, {scopes, approvedComm
     devices: (current?.devices || []).map(entry => (entry.id === deviceId ? publicDevice(next) : entry))
   }));
   return publicDevice(next);
+}
+
+/** Per-origin lists are operators of last resort: every entry must BE a bare https/http origin. */
+function cleanBrowserOrigins(value) {
+  const clean = list => [...new Set((Array.isArray(list) ? list : []).map(String).filter(origin => {
+    try {
+      const url = new URL(origin);
+      return url.origin === origin && ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password;
+    } catch { return false; }
+  }))].slice(-MAX_ORIGIN_RECORDS);
+  return {allow: clean(value?.allow), deny: clean(value?.deny)};
 }
 
 /** Disconnect a computer. Also invalidates any session already issued to it. */

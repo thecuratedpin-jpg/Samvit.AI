@@ -147,6 +147,16 @@ export async function markActionDecision(accountId, actionId, {approved, now = D
     if (!result) throw Error('Action not found');
     return {rows: next};
   });
+  // V14 P10: a browser action's decision is remembered per origin, so the
+  // policy layer can stop asking about a site the user already settled —
+  // and stop quietly retrying a site they blocked.
+  if (result && /^browser\./.test(result.capability || '') && typeof result.args?.url === 'string' && result.deviceId) {
+    try {
+      const {noteBrowserOrigin} = await import('../../../shared/browser.js');
+      const origin = new URL(result.args.url).origin;
+      await casUpdate(accountStore(DEVICE_STORE, accountId), 'device:' + result.deviceId, d => d ? noteBrowserOrigin(d, origin, approved === true) : d);
+    } catch { /* origin memory is a convenience, never a decision blocker */ }
+  }
   return result;
 }
 
