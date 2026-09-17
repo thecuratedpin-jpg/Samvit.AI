@@ -172,9 +172,8 @@ export async function requireSession(request, env) {
     if(!user||user.disabled||payload.version!==user.sessionVersion)return {ok:false,status:401,message:'This session is no longer valid. Sign in again.'};
     const path=new URL(request.url).pathname;
     if(!user.emailVerified&&!['/api/auth','/api/status','/api/account'].includes(path))return {ok:false,status:403,message:'Verify your email before using this feature.'};
-    const meta=await store.get('meta',{type:'json',consistency:'strong'});
-    if(meta?.ownerAccountId===user.id&&!meta.migrationComplete)return {ok:false,status:503,message:'Your data migration must finish. Sign in again to resume it.'};
-    return {ok:true,open:false,accountId:user.id,email:user.email,emailVerified:Boolean(user.emailVerified),role:user.emailVerified?(meta?.ownerAccountId===user.id?'owner':'member'):'unverified'};
+    const {accountRole}=await import('./accounts.js');
+    return {ok:true,open:false,accountId:user.id,email:user.email,emailVerified:Boolean(user.emailVerified),role:accountRole(user,env),preferences:{emailMissionNotifications:false,emailSecurityNotifications:true,...(user.preferences||{})}};
   }catch{return {ok:false,status:503,code:AUTHENTICATION_UNAVAILABLE,message:'Account verification is temporarily unavailable.'};}
 }
 

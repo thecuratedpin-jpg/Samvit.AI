@@ -49,6 +49,13 @@ export async function purgeAccount(job,now=Date.now(),env){
   }
  }
  await casUpdate(accounts,'meta',r=>r?.ownerAccountId===id?{...r,ownerDeleted:true,migrationComplete:true}:r);
+ // V14: scrub any dev-mode email captures addressed to this account.
+ try{
+  const outbox=getStore('samvit-email-dev-outbox'),record=await outbox.get('messages',{type:'json',consistency:'strong'});
+  if(Array.isArray(record?.rows)&&record.rows.some(row=>Array.isArray(row.to)&&row.to.includes(a?.email))){
+   await outbox.setJSON('messages',{rows:record.rows.filter(row=>!(Array.isArray(row.to)&&row.to.includes(a?.email)))});
+  }
+ }catch{/* dev outbox hygiene must never block deletion */}
  await casUpdate(getStore('samvit-account-deletions'),id,r=>({...r,emailIndex:null,status:'complete',completedAt:now}));
  return true;
 }

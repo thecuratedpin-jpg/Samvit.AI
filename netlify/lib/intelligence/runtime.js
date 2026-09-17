@@ -15,6 +15,7 @@ import {recordExperience,worldState} from './world-state.js';
 import {snapshot as snapshotEnvironment} from './vfs.js';
 import {verifyEnvironment,verifyDeviceObservations,mergeEnvironmentVerifications} from './environment.js';
 import {deviceAvailability,deviceContextSummary} from '../devices/dispatch.js';
+import {notifyMissionOutcome} from '../notifications.js';
 export async function runJob(accountId,id,env,{modelCall=callModel,agent=runAgent,now=()=>Date.now()}={}){
  const store=getStore(JOB_STORE),key=jobKey(accountId,id),token=crypto.randomUUID();let job;
  const {value:claimed}=await casUpdate(store,key,r=>{
@@ -150,6 +151,6 @@ export async function runJob(accountId,id,env,{modelCall=callModel,agent=runAgen
   }catch{/* experience is best-effort */}
   }
  }catch(e){try{await update(r=>({...r,status:'failed',error:controller.signal.aborted?'Mission stopped at its time limit':'Mission could not complete. Check model access, tool configuration and remaining budget.',notification:'Mission needs attention'}));}catch{/* paused/cancelled or another worker owns the state */}}
- finally{clearInterval(heartbeat);clearTimeout(timeout);controller.abort();try{await update(r=>({...r,activeMs:r.activeMs+Math.max(0,now()-start),startedAt:null,lease:null}),{control:true});if(TERMINAL.includes(job.status))await releaseAdmission(accountId,id);}catch{/* a newer owner retains the lease */}}
+ finally{clearInterval(heartbeat);clearTimeout(timeout);controller.abort();try{await update(r=>({...r,activeMs:r.activeMs+Math.max(0,now()-start),startedAt:null,lease:null}),{control:true});if(TERMINAL.includes(job.status)){await releaseAdmission(accountId,id);await notifyMissionOutcome(job,env,{store,key,casUpdate});}}catch{/* a newer owner retains the lease */}}
  return {claimed:true};
 }

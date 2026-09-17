@@ -109,7 +109,7 @@ export async function beginPairing(accountId, {now = Date.now()} = {}) {
  * Redeem a pairing code on behalf of the local agent.
  * Returns the device token exactly once — it is never stored in plaintext.
  */
-export async function completePairing({code, deviceName, platform, arch}, {now = Date.now()} = {}) {
+export async function completePairing({code, deviceName, platform, arch}, {now = Date.now(), env = null} = {}) {
   const cleaned = String(code || '').replace(/[\s-]/g, '').toUpperCase();
   if (!/^[A-Z2-9]{8}$/.test(cleaned)) throw Error('Enter the 8-character pairing code');
   const store = getStore(PAIRING_STORE);
@@ -156,6 +156,15 @@ export async function completePairing({code, deviceName, platform, arch}, {now =
     sessionVersion: 1,
     lastSeenAt: null
   });
+  // V14 P16: pairing a physical computer is security-relevant — tell the
+  // account owner (best-effort; pairing must never fail because email did).
+  if (env) {
+    const {notifySecurityEventById} = await import('../notifications.js');
+    await notifySecurityEventById(accountId, env, {
+      headline: 'A new computer was paired to your account',
+      detail: `"${device.name}" (${device.platform}/${device.arch}) was connected with a pairing code. If you did not do this, sign in and revoke the computer immediately.`
+    });
+  }
   return {deviceId: id, deviceToken: token, device: publicDevice(device)};
 }
 
@@ -193,7 +202,7 @@ export async function setDevicePolicy(accountId, deviceId, {scopes, approvedComm
 }
 
 /** Disconnect a computer. Also invalidates any session already issued to it. */
-export async function revokeDevice(accountId, deviceId, {now = Date.now()} = {}) {
+export async function revokeDevice(accountId, deviceId, {now = Date.now(), env = null} = {}) {
   const device = await getDevice(accountId, deviceId);
   if (!device) throw Error('Computer not found');
   const revoked = {...device, revoked: true, revokedAt: now, sessionVersion: (device.sessionVersion || 1) + 1};
@@ -208,6 +217,13 @@ export async function revokeDevice(accountId, deviceId, {now = Date.now()} = {})
     });
   }
   await getStore(DEVICE_AUTH_STORE).delete('session:' + deviceId);
+  if (env) {
+    const {notifySecurityEventById} = await import('../notifications.js');
+    await notifySecurityEventById(accountId, env, {
+      headline: 'A computer was disconnected from your account',
+      detail: `"${device.name || deviceId}" was revoked and can no longer act for you. Its credentials are burned.`
+    });
+  }
   return publicDevice(revoked);
 }
 

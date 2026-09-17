@@ -55,7 +55,7 @@ export default async (req, context) => {
         deviceName: body.deviceName,
         platform: body.platform,
         arch: body.arch
-      });
+      }, {env});
       return json({
         deviceId: result.deviceId,
         deviceToken: result.deviceToken,

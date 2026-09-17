@@ -50,7 +50,7 @@ export default async (req, context) => {
       }
       case 'revoke': {
         if (!body.deviceId) return json({error: '`deviceId` is required.'}, 400);
-        return json({device: await revokeDevice(auth.accountId, body.deviceId)});
+        return json({device: await revokeDevice(auth.accountId, body.deviceId, {env})});
       }
       case 'approve': {
         if (!body.actionId) return json({error: '`actionId` is required.'}, 400);
